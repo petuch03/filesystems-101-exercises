@@ -36,7 +36,6 @@ static void handle_path_component(char* res, size_t* pos, const char* comp) {
     res[*pos] = '\0';
 
     if (lstat(res, &st) != 0) {
-        size_t save_pos = *pos;
         *pos -= comp_len;
         if (*pos > 0 && res[*pos - 1] == '/')
             res[--(*pos)] = '\0';
