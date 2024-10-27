@@ -97,7 +97,9 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
                 link_buf[link_len] = '\0';
 
                 if (link_buf[0] == '/') {
-                    strncpy(new_path, link_buf, sizeof(new_path) - 1);
+                    size_t buf_len = link_len;
+                    memcpy(new_path, link_buf, buf_len);
+                    new_path[buf_len] = '\0';
                 } else {
                     size_t cur_dir_len = *result_len;
                     if (cur_dir_len > 1) {
