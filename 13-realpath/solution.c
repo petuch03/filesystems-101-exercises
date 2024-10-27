@@ -1,119 +1,147 @@
 #include <solution.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <limits.h>
 
-#define MAX_PATH 4096
+typedef struct {
+    char* buffer;
+    size_t length;
+} PathString;
 
-void abspath(const char *path) {
-    char *result = malloc(MAX_PATH);
-    char initial_path[MAX_PATH];
-    char link_buf[MAX_PATH];
-    char segment[MAX_PATH];
-    struct stat st;
-    
-    if (!result) exit(2);
-    result[0] = '\0';
-    
-    if (path[0] != '/') {
-        snprintf(initial_path, sizeof(initial_path), "/%s", path);
+static void init_path_string(PathString* ps) {
+    ps->buffer = malloc(4096);
+    ps->length = 0;
+    if (ps->buffer) {
+        ps->buffer[0] = '/';
+        ps->buffer[1] = '\0';
+        ps->length = 1;
     } else {
-        snprintf(initial_path, sizeof(initial_path), "%s", path);
+        exit(2);
     }
-    
-    char *current = initial_path;
-    while (current) {
-        char *next = strchr(current + 1, '/');
-        size_t seg_len;
-        
-        if (next) {
-            seg_len = next - current;
+}
+
+static void append_to_path(PathString* ps, const char* str, size_t len) {
+    if (ps->length > 1 && ps->buffer[ps->length - 1] == '/' && str[0] == '/') {
+        str++;
+        len--;
+    }
+    memcpy(ps->buffer + ps->length, str, len);
+    ps->length += len;
+    ps->buffer[ps->length] = '\0';
+}
+
+static void remove_last_component(PathString* ps) {
+    if (ps->length <= 1) return;
+
+    size_t i = ps->length - 2;  // Skip trailing null
+    while (i > 0 && ps->buffer[i] != '/') i--;
+    ps->length = i + 1;
+    ps->buffer[ps->length] = '\0';
+}
+
+static int handle_special_dir(PathString* ps, const char* name) {
+    if (strcmp(name, "/.") == 0) {
+        return 1;
+    }
+    if (strcmp(name, "/..") == 0) {
+        remove_last_component(ps);
+        return 1;
+    }
+    return 0;
+}
+
+static int process_symlink(PathString* ps, char* work_buf, char** next_path) {
+    ssize_t link_size = readlink(ps->buffer, work_buf, 4095);
+    if (link_size <= 0) return 0;
+
+    work_buf[link_size] = '\0';
+    if (work_buf[0] == '/') {
+        ps->length = 0;
+        append_to_path(ps, "/", 1);
+        append_to_path(ps, work_buf, strlen(work_buf));
+    } else {
+        remove_last_component(ps);
+        char* new_path = malloc(8192);
+        if (!new_path) exit(2);
+
+        if (*next_path) {
+            snprintf(new_path, 8192, "/%s%s", work_buf, *next_path);
         } else {
-            seg_len = strlen(current);
+            snprintf(new_path, 8192, "/%s", work_buf);
         }
-        
-        memcpy(segment, current, seg_len);
-        segment[seg_len] = '\0';
-        
-        if (strcmp(segment, "/.") == 0) {
-            current = next;
+        *next_path = new_path;
+        ps->length = 1;
+        ps->buffer[1] = '\0';
+    }
+    return 1;
+}
+
+void abspath(const char* path) {
+    PathString result;
+    init_path_string(&result);
+
+    char work_buffer[4096];
+    char current[4096];
+    struct stat st;
+
+    snprintf(work_buffer, sizeof(work_buffer), "%s%s",
+             path[0] != '/' ? "/" : "", path);
+    char* current_pos = work_buffer;
+
+    while (current_pos) {
+        char* next = strchr(current_pos + 1, '/');
+        size_t part_len = next ? (size_t)(next - current_pos)
+                              : strlen(current_pos);
+
+        memcpy(current, current_pos, part_len);
+        current[part_len] = '\0';
+
+        if (handle_special_dir(&result, current)) {
+            current_pos = next;
             continue;
         }
-        
-        if (strcmp(segment, "/..") == 0) {
-            if (result[0] != '\0') {
-                char *last = strrchr(result, '/');
-                if (last != NULL) {
-                    *last = '\0';
+
+        size_t old_len = result.length;
+        append_to_path(&result, current, strlen(current));
+
+        if (stat(result.buffer, &st) == -1) {
+            result.buffer[old_len] = '\0';
+            result.length = old_len;
+
+            if (current[part_len - 1] == '/') {
+                current[part_len - 1] = '\0';
+            }
+
+            char* component = current + 1;
+            if (errno == ENOTDIR && result.length > 1) {
+                char* last_sep = strrchr(result.buffer, '/');
+                if (last_sep) {
+                    component = last_sep + 1;
+                    *last_sep = '\0';
+                    result.length = strlen(result.buffer);
                 }
             }
-            current = next;
-            continue;
-        }
-        
-        if (result[0] != '\0' && result[strlen(result) - 1] == '/' && segment[0] == '/') {
-            snprintf(result + strlen(result), MAX_PATH - strlen(result), "%s", segment + 1);
-        } else {
-            snprintf(result + strlen(result), MAX_PATH - strlen(result), "%s", segment);
-        }
-        
-        ssize_t link_len = readlink(result, link_buf, MAX_PATH - 1);
-        if (link_len != -1) {
-            link_buf[link_len] = '\0';
-            if (link_buf[0] == '/') {
-                snprintf(result, MAX_PATH, "%s", link_buf);
-            } else {
-                char *tmp_path = malloc(MAX_PATH);
-                if (!tmp_path) exit(2);
-                
-                if (next) {
-                    snprintf(tmp_path, MAX_PATH, "/%s%s", link_buf, next);
-                } else {
-                    snprintf(tmp_path, MAX_PATH, "/%s", link_buf);
-                }
-                
-                snprintf(initial_path, MAX_PATH, "%s", tmp_path);
-                free(tmp_path);
-                result[0] = '\0';
-                current = initial_path;
-                continue;
-            }
-        }
-        
-        if (stat(result, &st) == -1) {
-            char curr_component[MAX_PATH];
-            snprintf(curr_component, MAX_PATH, "%s", segment + 1);
-            
-            if (result[0] != '\0') {
-                if (result[strlen(result) - 1] == '/') {
-                    result[strlen(result) - 1] = '\0';
-                }
-                char *last = strrchr(result, '/');
-                if (last) {
-                    *(last + 1) = '\0';
-                }
-            }
-            
-            if (curr_component[strlen(curr_component) - 1] == '/') {
-                curr_component[strlen(curr_component) - 1] = '\0';
-            }
-            
-            report_error(result[0] == '\0' ? "/" : result, curr_component, errno);
-            free(result);
+
+            report_error(result.length ? result.buffer : "/",
+                        component, errno);
+            free(result.buffer);
             return;
         }
-        
-        if (S_ISDIR(st.st_mode) && result[strlen(result) - 1] != '/') {
-            snprintf(result + strlen(result), MAX_PATH - strlen(result), "/");
+
+        if (process_symlink(&result, work_buffer, &current_pos)) {
+            continue;
         }
-        
-        current = next;
+
+        if (S_ISDIR(st.st_mode) && result.buffer[result.length - 1] != '/') {
+            append_to_path(&result, "/", 1);
+        }
+
+        current_pos = next;
     }
-    
-    report_path(result);
-    free(result);
+
+    report_path(result.buffer);
+    free(result.buffer);
 }
