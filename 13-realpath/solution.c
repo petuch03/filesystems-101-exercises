@@ -35,16 +35,26 @@ static void handle_path_segment(char *result, size_t *result_len, const char *se
     result[*result_len] = '\0';
 }
 
-static void split_last_component(const char *path, char *dir, char *file) {
+static void split_last_component(const char *path, char *dir, size_t *dir_len, char *file, size_t *file_len) {
     const char *last_slash = strrchr(path, '/');
 
     if (!last_slash || last_slash == path) {
-        strcpy(dir, "/");
-        strcpy(file, path[0] == '/' ? path + 1 : path);
+        memcpy(dir, "/", 1);
+        *dir_len = 1;
+        dir[*dir_len] = '\0';
+
+        const char *file_start = path[0] == '/' ? path + 1 : path;
+        *file_len = strlen(file_start);
+        memcpy(file, file_start, *file_len);
+        file[*file_len] = '\0';
     } else {
-        memcpy(dir, path, last_slash - path);
-        dir[last_slash - path] = '\0';
-        strcpy(file, last_slash + 1);
+        *dir_len = last_slash - path;
+        memcpy(dir, path, *dir_len);
+        dir[*dir_len] = '\0';
+
+        *file_len = strlen(last_slash + 1);
+        memcpy(file, last_slash + 1, *file_len);
+        file[*file_len] = '\0';
     }
 }
 
@@ -129,10 +139,11 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
 
                 if (*p) {
                     size_t new_len = strlen(new_path);
+                    size_t remaining_len = strlen(p);
                     if (new_path[new_len - 1] != '/') {
                         new_path[new_len++] = '/';
                     }
-                    strcpy(new_path + new_len, p);
+                    memcpy(new_path + new_len, p, remaining_len + 1);
                 }
 
                 return resolve_path(result, result_len, new_path, symlinks_followed + 1);
