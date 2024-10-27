@@ -24,10 +24,11 @@ static void init_path_string(PathString* ps) {
 }
 
 static void append_to_path(PathString* ps, const char* str, size_t len) {
-    if (ps->length > 1 && ps->buffer[ps->length - 1] == '/' && str[0] == '/') {
+    while (len > 0 && str[0] == '/' && ps->buffer[ps->length - 1] == '/') {
         str++;
         len--;
     }
+    if (len == 0) return;
     memcpy(ps->buffer + ps->length, str, len);
     ps->length += len;
     ps->buffer[ps->length] = '\0';
