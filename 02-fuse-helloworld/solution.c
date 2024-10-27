@@ -1,4 +1,4 @@
-#define FUSE_USE_VERSION 31
+#include "solution.h"
 #include <fuse.h>
 #include <string.h>
 #include <errno.h>
@@ -7,8 +7,10 @@
 
 static const char *hello_path = "/hello";
 
-static int hello_getattr(const char *path, struct stat *stbuf)
+static int hello_getattr(const char *path, struct stat *stbuf,
+                        struct fuse_file_info *fi)
 {
+    (void) fi;
     memset(stbuf, 0, sizeof(struct stat));
 
     if (strcmp(path, "/") == 0) {
@@ -18,11 +20,11 @@ static int hello_getattr(const char *path, struct stat *stbuf)
         stbuf->st_gid = getgid();
     }
     else if (strcmp(path, hello_path) == 0) {
-        stbuf->st_mode = S_IFREG | 0400;  // read-only for owner
+        stbuf->st_mode = S_IFREG | 0400;
         stbuf->st_nlink = 1;
         stbuf->st_uid = getuid();
         stbuf->st_gid = getgid();
-        stbuf->st_size = 128;  // approximate size, doesn't need to match exactly
+        stbuf->st_size = 128;
     }
     else
         return -ENOENT;
@@ -31,17 +33,19 @@ static int hello_getattr(const char *path, struct stat *stbuf)
 }
 
 static int hello_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                        off_t offset, struct fuse_file_info *fi)
+                        off_t offset, struct fuse_file_info *fi,
+                        enum fuse_readdir_flags flags)
 {
     (void) offset;
     (void) fi;
+    (void) flags;
 
     if (strcmp(path, "/") != 0)
         return -ENOENT;
 
-    filler(buf, ".", NULL, 0);
-    filler(buf, "..", NULL, 0);
-    filler(buf, "hello", NULL, 0);
+    filler(buf, ".", NULL, 0, 0);
+    filler(buf, "..", NULL, 0, 0);
+    filler(buf, "hello", NULL, 0, 0);
 
     return 0;
 }
@@ -66,12 +70,15 @@ static int hello_read(const char *path, char *buf, size_t size, off_t offset,
         return -ENOENT;
 
     char content[128];
-    int len = snprintf(content, sizeof(content), "hello, %d\n", (int)fuse_get_context()->pid);
+    ssize_t len = snprintf(content, sizeof(content), "hello, %d\n", (int)fuse_get_context()->pid);
+
+    if (len < 0)
+        return -EIO;
 
     if (offset >= len)
         return 0;
 
-    if (offset + size > len)
+    if ((size_t)(offset + size) > (size_t)len)
         size = len - offset;
 
     memcpy(buf, content + offset, size);
@@ -81,7 +88,12 @@ static int hello_read(const char *path, char *buf, size_t size, off_t offset,
 static int hello_write(const char *path, const char *buf, size_t size,
                       off_t offset, struct fuse_file_info *fi)
 {
-    return -EROFS;  // Read-only filesystem
+    (void) path;
+    (void) buf;
+    (void) size;
+    (void) offset;
+    (void) fi;
+    return -EROFS;
 }
 
 struct fuse_operations hellofs_ops = {
