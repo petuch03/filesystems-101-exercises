@@ -39,8 +39,6 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
     struct stat st;
     char link_buf[MAX_PATH_LEN];
     const char *p = path;
-    char parent_path[MAX_PATH_LEN];
-    size_t parent_len = 0;
 
     if (symlinks_followed >= MAX_SYMLINKS) {
         errno = ELOOP;
@@ -53,14 +51,12 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
         p++;
     }
 
+    char current_path[MAX_PATH_LEN] = "/";
+    size_t current_len = 1;
+
     while (*p) {
         const char *seg_start = p;
         size_t seg_len = 0;
-
-        // Save parent path
-        memcpy(parent_path, result, *result_len);
-        parent_len = *result_len;
-        parent_path[parent_len] = '\0';
 
         while (*p && *p != '/') {
             p++;
@@ -88,8 +84,9 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
 
             if (lstat(temp_path, &st) != 0) {
                 if (errno == ENOENT) {
-                    // For ENOENT, report the parent path and the failing component
-                    report_error(parent_path, seg_start, ENOENT);
+                    memcpy(current_path, result, *result_len);
+                    current_path[*result_len] = '\0';
+                    report_error(current_path, seg_start, ENOENT);
                 } else {
                     report_error(result, seg_start, errno);
                 }
@@ -109,9 +106,8 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
                 link_buf[link_len] = '\0';
 
                 if (link_buf[0] == '/') {
-                    size_t buf_len = link_len;
-                    memcpy(new_path, link_buf, buf_len);
-                    new_path[buf_len] = '\0';
+                    memcpy(new_path, link_buf, link_len);
+                    new_path[link_len] = '\0';
                 } else {
                     size_t cur_dir_len = *result_len;
                     if (cur_dir_len > 1) {
@@ -138,6 +134,15 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
             } else {
                 handle_path_segment(result, result_len, seg_start, seg_len);
             }
+
+            memcpy(current_path, temp_path, temp_len + seg_len);
+            current_path[temp_len + seg_len] = '\0';
+            current_len = temp_len + seg_len;
+
+            if (S_ISDIR(st.st_mode)) {
+                current_path[current_len++] = '/';
+                current_path[current_len] = '\0';
+            }
         }
     }
 
@@ -151,7 +156,13 @@ void abspath(const char *path) {
 
     if (resolve_path(result, &result_len, path, 0) == 0) {
         if (stat(result, &st) != 0) {
-            report_error("/", result + 1, errno);
+            char *last_slash = strrchr(result, '/');
+            if (last_slash != NULL && last_slash != result) {
+                *last_slash = '\0';
+                report_error(result, last_slash + 1, errno);
+            } else {
+                report_error("/", result + 1, errno);
+            }
             return;
         }
 
