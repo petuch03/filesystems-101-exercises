@@ -104,7 +104,8 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
             if (lstat(temp_path, &st) != 0) {
                 if (errno == ENOENT) {
                     char dir[MAX_PATH_LEN], file[MAX_PATH_LEN];
-                    split_last_component(temp_path, dir, file);
+                    size_t dir_len, file_len;
+                    split_last_component(temp_path, dir, &dir_len, file, &file_len);
                     report_error(dir, file, ENOENT);
                 } else {
                     report_error(result, seg_start, errno);
@@ -164,7 +165,8 @@ void abspath(const char *path) {
     if (resolve_path(result, &result_len, path, 0) == 0) {
         if (stat(result, &st) != 0) {
             char dir[MAX_PATH_LEN], file[MAX_PATH_LEN];
-            split_last_component(result, dir, file);
+            size_t dir_len, file_len;
+            split_last_component(result, dir, &dir_len, file, &file_len);
             report_error(dir, file, errno);
             return;
         }
