@@ -4,7 +4,7 @@
 #include <string.h>
 #include <errno.h>
 
-#define BLOCK_SIZE (256 * 1024)  // 256KB blocks
+#define COPY_BLOCK_SIZE (256 * 1024)  // 256KB blocks
 #define QUEUE_DEPTH 4
 
 struct io_data {
@@ -28,7 +28,7 @@ int copy(int in, int out) {
         return -errno;
 
     for (int i = 0; i < QUEUE_DEPTH; i++) {
-        iodata[i].buf = malloc(BLOCK_SIZE);
+        iodata[i].buf = malloc(COPY_BLOCK_SIZE);
         if (!iodata[i].buf) {
             ret = -ENOMEM;
             goto cleanup;
@@ -45,9 +45,9 @@ int copy(int in, int out) {
         }
 
         iodata[i].offset = current_offset;
-        io_uring_prep_read(sqe, in, iodata[i].buf, BLOCK_SIZE, current_offset);
+        io_uring_prep_read(sqe, in, iodata[i].buf, COPY_BLOCK_SIZE, current_offset);
         io_uring_sqe_set_data(sqe, &iodata[i]);
-        current_offset += BLOCK_SIZE;
+        current_offset += COPY_BLOCK_SIZE;
         pending_reads++;
         inflight++;
     }
@@ -90,7 +90,7 @@ int copy(int in, int out) {
                 io_uring_sqe_set_data(sqe, data);
                 pending_writes++;
 
-                if (res == BLOCK_SIZE) {
+                if (res == COPY_BLOCK_SIZE) {
                     sqe = io_uring_get_sqe(&ring);
                     if (!sqe) {
                         ret = -EAGAIN;
@@ -108,9 +108,9 @@ int copy(int in, int out) {
                     if (new_data) {
                         new_data->offset = current_offset;
                         new_data->read_done = 0;
-                        io_uring_prep_read(sqe, in, new_data->buf, BLOCK_SIZE, current_offset);
+                        io_uring_prep_read(sqe, in, new_data->buf, COPY_BLOCK_SIZE, current_offset);
                         io_uring_sqe_set_data(sqe, new_data);
-                        current_offset += BLOCK_SIZE;
+                        current_offset += COPY_BLOCK_SIZE;
                         pending_reads++;
                         inflight++;
                     }
