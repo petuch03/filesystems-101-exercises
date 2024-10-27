@@ -6,91 +6,197 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define MAX_PATH_LEN 1024
-#define MAX_ARGS 512
-#define MAX_BUF_SIZE 16384
+#define CHUNK_SIZE 2048
 
-static void process_cmdline(const char *filename, char **args, size_t *count) {
-    FILE *fp = fopen(filename, "r");
-    if (!fp) return;
+typedef struct {
+    char* data;
+    size_t capacity;
+    size_t used;
+} DynamicBuffer;
 
-    char buffer[MAX_BUF_SIZE];
-    *count = 0;
-    size_t bytes = fread(buffer, 1, sizeof(buffer) - 1, fp);
-    fclose(fp);
+typedef struct {
+    char** items;
+    size_t capacity;
+    size_t count;
+} StringArray;
 
-    if (bytes > 0) {
-        char *curr = buffer;
-        while (*count < MAX_ARGS - 1 && curr < buffer + bytes) {
-            args[*count] = strdup(curr);
-            if (!args[*count]) break;
-            curr += strlen(curr) + 1;
-            (*count)++;
-        }
+static DynamicBuffer* create_buffer(void) {
+    DynamicBuffer* buf = malloc(sizeof(DynamicBuffer));
+    if (!buf) return NULL;
+
+    buf->data = malloc(CHUNK_SIZE);
+    if (!buf->data) {
+        free(buf);
+        return NULL;
     }
-    args[*count] = NULL;
+
+    buf->capacity = CHUNK_SIZE;
+    buf->used = 0;
+    return buf;
 }
 
-static void get_process_info(const char *pid_str) {
-    char path[MAX_PATH_LEN];
-    char exe_buf[MAX_PATH_LEN];
-    char *argv[MAX_ARGS] = {NULL};
-    char *envp[MAX_ARGS] = {NULL};
-    size_t argc = 0, envc = 0;
+static StringArray* create_string_array(void) {
+    StringArray* arr = malloc(sizeof(StringArray));
+    if (!arr) return NULL;
 
-    // Get executable path
-    snprintf(path, sizeof(path), "/proc/%s/exe", pid_str);
-    ssize_t len = readlink(path, exe_buf, sizeof(exe_buf) - 1);
-    if (len < 0) {
+    arr->items = malloc(CHUNK_SIZE * sizeof(char*));
+    if (!arr->items) {
+        free(arr);
+        return NULL;
+    }
+
+    arr->capacity = CHUNK_SIZE;
+    arr->count = 0;
+    return arr;
+}
+
+static int expand_buffer(DynamicBuffer* buf) {
+    size_t new_size = buf->capacity * 2;
+    char* new_data = realloc(buf->data, new_size);
+    if (!new_data) return 0;
+
+    buf->data = new_data;
+    buf->capacity = new_size;
+    return 1;
+}
+
+static int expand_array(StringArray* arr) {
+    size_t new_size = arr->capacity * 2;
+    char** new_items = realloc(arr->items, new_size * sizeof(char*));
+    if (!new_items) return 0;
+
+    arr->items = new_items;
+    arr->capacity = new_size;
+    return 1;
+}
+
+static void free_buffer(DynamicBuffer* buf) {
+    if (buf) {
+        free(buf->data);
+        free(buf);
+    }
+}
+
+static void free_string_array(StringArray* arr) {
+    if (arr) {
+        for (size_t i = 0; i < arr->count; i++) {
+            free(arr->items[i]);
+        }
+        free(arr->items);
+        free(arr);
+    }
+}
+
+static DynamicBuffer* read_file_content(const char* path) {
+    FILE* file = fopen(path, "r");
+    if (!file) return NULL;
+
+    DynamicBuffer* buf = create_buffer();
+    if (!buf) {
+        fclose(file);
+        return NULL;
+    }
+
+    while (1) {
+        if (buf->used >= buf->capacity && !expand_buffer(buf)) break;
+
+        size_t bytes = fread(buf->data + buf->used, 1,
+                           buf->capacity - buf->used, file);
+        if (bytes == 0) break;
+        buf->used += bytes;
+    }
+
+    fclose(file);
+    return buf;
+}
+
+static StringArray* split_null_terminated(DynamicBuffer* buf) {
+    StringArray* arr = create_string_array();
+    if (!arr) return NULL;
+
+    char* current = buf->data;
+    char* end = buf->data + buf->used;
+
+    while (current < end) {
+        if (arr->count >= arr->capacity - 1 && !expand_array(arr)) {
+            free_string_array(arr);
+            return NULL;
+        }
+
+        arr->items[arr->count] = strdup(current);
+        if (!arr->items[arr->count]) {
+            free_string_array(arr);
+            return NULL;
+        }
+
+        arr->count++;
+        current += strlen(current) + 1;
+    }
+
+    arr->items[arr->count] = NULL;
+    return arr;
+}
+
+static void process_single_pid(const char* name) {
+    char path[512];
+    char exe_result[4096];
+    DynamicBuffer *cmd_buf = NULL, *env_buf = NULL;
+    StringArray *args = NULL, *env = NULL;
+
+    // Read executable path
+    snprintf(path, sizeof(path), "/proc/%s/exe", name);
+    ssize_t exe_length = readlink(path, exe_result, sizeof(exe_result) - 1);
+    if (exe_length < 0) {
         report_error(path, errno);
         return;
     }
-    exe_buf[len] = '\0';
+    exe_result[exe_length] = '\0';
 
-    // Get command line
-    snprintf(path, sizeof(path), "/proc/%s/cmdline", pid_str);
-    process_cmdline(path, argv, &argc);
-    if (!argc) {
+    // Read command line
+    snprintf(path, sizeof(path), "/proc/%s/cmdline", name);
+    cmd_buf = read_file_content(path);
+    if (!cmd_buf) {
         report_error(path, errno);
         return;
     }
 
-    // Get environment
-    snprintf(path, sizeof(path), "/proc/%s/environ", pid_str);
-    process_cmdline(path, envp, &envc);
+    args = split_null_terminated(cmd_buf);
+    if (!args) goto cleanup;
 
-    // Report process info
-    report_process(atoi(pid_str), exe_buf, argv, envp);
+    // Read environment
+    snprintf(path, sizeof(path), "/proc/%s/environ", name);
+    env_buf = read_file_content(path);
+    if (!env_buf) goto cleanup;
 
-    // Cleanup
-    for (size_t i = 0; i < argc; i++) {
-        free(argv[i]);
-    }
-    for (size_t i = 0; i < envc; i++) {
-        free(envp[i]);
-    }
+    env = split_null_terminated(env_buf);
+    if (!env) goto cleanup;
+
+    report_process(atoi(name), exe_result, args->items, env->items);
+
+cleanup:
+    free_buffer(cmd_buf);
+    free_buffer(env_buf);
+    free_string_array(args);
+    free_string_array(env);
 }
 
 void ps(void) {
-    DIR *dir = opendir("/proc");
-    if (!dir) {
+    DIR* procdir = opendir("/proc");
+    if (!procdir) {
         report_error("/proc", errno);
         return;
     }
 
-    struct dirent *entry;
-    while ((entry = readdir(dir))) {
-        // Check if entry is a process directory
-        if (entry->d_type != DT_DIR)
-            continue;
+    struct dirent* entry;
+    while ((entry = readdir(procdir))) {
+        if (entry->d_type != DT_DIR) continue;
 
-        char *endptr;
+        char* endptr;
         long pid = strtol(entry->d_name, &endptr, 10);
-        if (*endptr != '\0' || pid <= 0)
-            continue;
+        if (*endptr != '\0' || pid <= 0) continue;
 
-        get_process_info(entry->d_name);
+        process_single_pid(entry->d_name);
     }
 
-    closedir(dir);
+    closedir(procdir);
 }
