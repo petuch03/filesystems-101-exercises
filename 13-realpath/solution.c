@@ -56,7 +56,6 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
     while (*p) {
         const char *seg_start = p;
         size_t seg_len = 0;
-        char *last_component = NULL;
 
         while (*p && *p != '/') {
             p++;
