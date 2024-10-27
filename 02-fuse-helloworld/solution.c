@@ -9,86 +9,56 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
-static char* build_message(void) {
-    static char buf[128];
-    pid_t current_pid = fuse_get_context()->pid;
-    snprintf(buf, sizeof(buf), "hello, %d\n", current_pid);
-    return buf;
+#define FILE_PATH "/hello"
+#define FILE_MODE 0755
+#define READ_ONLY_MODE 0400
+
+static char* generate_greeting() {
+    static char message[64];
+    snprintf(message, sizeof(message), "hello, %d\n", fuse_get_context()->pid);
+    return message;
 }
 
-static int fs_attributes(const char* path, struct stat* stats) {
+int fs_attributes(const char* path, struct stat* statbuf, struct fuse_file_info* fi) {
+    (void) fi;
+    memset(statbuf, 0, sizeof(struct stat));
     if (strcmp(path, "/") == 0) {
-        stats->st_mode = S_IFDIR | 0755;
-        stats->st_nlink = 2;
-        stats->st_size = 0;
-        stats->st_uid = geteuid();
-        stats->st_gid = getegid();
+        statbuf->st_mode = S_IFDIR | FILE_MODE;
+        statbuf->st_nlink = 2;
+        statbuf->st_uid = geteuid();
+        statbuf->st_gid = getegid();
+        return 0;
+    } else if (strcmp(path, FILE_PATH) == 0) {
+        statbuf->st_mode = S_IFREG | READ_ONLY_MODE;
+        statbuf->st_nlink = 1;
+        statbuf->st_size = strlen(generate_greeting());
+        statbuf->st_uid = geteuid();
+        statbuf->st_gid = getegid();
         return 0;
     }
-
-    if (strcmp(path, "/hello") == 0) {
-        stats->st_mode = S_IFREG | 0400;
-        stats->st_nlink = 1;
-        stats->st_size = strlen(build_message());
-        stats->st_uid = geteuid();
-        stats->st_gid = getegid();
-        return 0;
-    }
-
     return -ENOENT;
 }
 
-static int fs_list_dir(const char* path, void* buffer, fuse_fill_dir_t filler,
-                      off_t offset, struct fuse_file_info* fi) {
-    (void) offset;
+int fs_open(const char* path, struct fuse_file_info* fi) {
+    if (strcmp(path, FILE_PATH) != 0) return -ENOENT;
+    if ((fi->flags & O_ACCMODE) != O_RDONLY) return -EROFS;
+    return 0;
+}
+
+int fs_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi) {
     (void) fi;
-
-    if (strcmp(path, "/") != 0)
-        return -ENOENT;
-
-    struct stat st = {0};
-    st.st_mode = S_IFDIR | 0755;
-    filler(buffer, ".", &st, 0);
-    filler(buffer, "..", &st, 0);
-
-    st.st_mode = S_IFREG | 0400;
-    st.st_size = strlen(build_message());
-    filler(buffer, "hello", &st, 0);
-
-    return 0;
-}
-
-static int fs_open(const char* path, struct fuse_file_info* fi) {
-    if (strcmp(path, "/hello") != 0)
-        return -ENOENT;
-    if ((fi->flags & O_ACCMODE) != O_RDONLY)
-        return -EROFS;
-    return 0;
-}
-
-static int fs_read(const char* path, char* buf, size_t size, off_t offset,
-                  struct fuse_file_info* fi) {
-    if (strcmp(path, "/hello") != 0)
-        return -ENOENT;
-    if ((fi->flags & O_ACCMODE) != O_RDONLY)
-        return -ENOENT;
-
-    const char* content = build_message();
+    if (strcmp(path, FILE_PATH) != 0) return -ENOENT;
+    const char* content = generate_greeting();
     size_t content_len = strlen(content);
-
-    if ((size_t)offset >= content_len)
-        return 0;
-
-    if (size > content_len - offset)
-        size = content_len - offset;
-
+    if (offset >= content_len) return 0;
+    if (size > content_len - offset) size = content_len - offset;
     memcpy(buf, content + offset, size);
     return size;
 }
 
-static int fs_write(const char* path, const char* buf, size_t size,
-                   off_t offset, struct fuse_file_info* fi) {
+int fs_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi) {
     (void) path;
     (void) buf;
     (void) size;
@@ -97,19 +67,27 @@ static int fs_write(const char* path, const char* buf, size_t size,
     return -EROFS;
 }
 
-static int fs_truncate(const char* path, off_t offset) {
-    (void) path;
+int fs_list_dir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags) {
     (void) offset;
-    return -EROFS;
+    (void) fi;
+    (void) flags;
+
+    if (strcmp(path, "/") == 0) {
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        st.st_mode = S_IFDIR | FILE_MODE;
+        filler(buf, ".", &st, 0, 0);
+        filler(buf, "..", &st, 0, 0);
+        
+        st.st_mode = S_IFREG | READ_ONLY_MODE;
+        st.st_size = strlen(generate_greeting());
+        filler(buf, "hello", &st, 0, 0);
+        return 0;
+    }
+    return -ENOENT;
 }
 
-static int fs_chmod(const char* path, mode_t mode) {
-    (void) path;
-    (void) mode;
-    return -EROFS;
-}
-
-static int fs_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
+int fs_truncate(const char* path, mode_t mode, struct fuse_file_info* fi) {
     (void) path;
     (void) mode;
     (void) fi;
@@ -123,8 +101,8 @@ static struct fuse_operations hellofs_ops = {
     .read = fs_read,
     .write = fs_write,
     .truncate = fs_truncate,
-    .chmod = fs_chmod,
-    .create = fs_create,
+    .chmod = fs_truncate,
+    .create = fs_truncate,
 };
 
 int helloworld(const char *mntp)
