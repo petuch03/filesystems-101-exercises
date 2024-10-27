@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 
 #define MAX_PATH_LEN PATH_MAX
+#define MAX_SYMLINKS 40
 
 static void handle_path_segment(char *result, size_t *result_len, const char *segment, size_t seg_len) {
     if (seg_len == 0 || (seg_len == 1 && segment[0] == '.')) {
@@ -34,36 +35,19 @@ static void handle_path_segment(char *result, size_t *result_len, const char *se
     result[*result_len] = '\0';
 }
 
-static void process_path_component(char *result, size_t *result_len, const char *component, size_t len) {
-    const char *p = component;
-    const char *end = component + len;
-    const char *seg_start;
-
-    while (p < end) {
-        while (p < end && *p == '/') {
-            p++;
-        }
-
-        seg_start = p;
-
-        while (p < end && *p != '/') {
-            p++;
-        }
-
-        if (p > seg_start) {
-            handle_path_segment(result, result_len, seg_start, p - seg_start);
-        }
-    }
-}
-
-void abspath(const char *path) {
-    char result[MAX_PATH_LEN] = "/";
-    size_t result_len = 1;
+static int resolve_path(char *result, size_t *result_len, const char *path, int symlinks_followed) {
     struct stat st;
     char link_buf[MAX_PATH_LEN];
     const char *p = path;
 
+    if (symlinks_followed >= MAX_SYMLINKS) {
+        errno = ELOOP;
+        return -1;
+    }
+
     if (path[0] == '/') {
+        result[1] = '\0';
+        *result_len = 1;
         p++;
     }
 
@@ -82,11 +66,12 @@ void abspath(const char *path) {
 
         if (seg_len > 0) {
             char temp_path[MAX_PATH_LEN];
-            size_t temp_len = result_len;
+            size_t temp_len = *result_len;
 
-            memcpy(temp_path, result, result_len);
+            memcpy(temp_path, result, temp_len);
             temp_path[temp_len] = '\0';
-            if (result_len > 1) {
+
+            if (temp_len > 1) {
                 temp_path[temp_len++] = '/';
                 temp_path[temp_len] = '\0';
             }
@@ -96,39 +81,71 @@ void abspath(const char *path) {
 
             if (lstat(temp_path, &st) != 0) {
                 report_error(result, seg_start, errno);
-                return;
+                return -1;
             }
 
             if (S_ISLNK(st.st_mode)) {
-                ssize_t link_len = readlink(temp_path, link_buf, sizeof(link_buf) - 1);
+                char new_path[MAX_PATH_LEN];
+                ssize_t link_len;
+                size_t remaining_len;
+
+                link_len = readlink(temp_path, link_buf, sizeof(link_buf) - 1);
                 if (link_len < 0) {
                     report_error(result, seg_start, errno);
-                    return;
+                    return -1;
                 }
                 link_buf[link_len] = '\0';
 
                 if (link_buf[0] == '/') {
-                    result[1] = '\0';
-                    result_len = 1;
-                    process_path_component(result, &result_len, link_buf + 1, link_len - 1);
+                    strncpy(new_path, link_buf, sizeof(new_path) - 1);
                 } else {
-                    process_path_component(result, &result_len, link_buf, link_len);
+                    size_t cur_dir_len = *result_len;
+                    if (cur_dir_len > 1) {
+                        memcpy(new_path, result, cur_dir_len);
+                        new_path[cur_dir_len++] = '/';
+                    } else {
+                        new_path[0] = '/';
+                        cur_dir_len = 1;
+                    }
+                    memcpy(new_path + cur_dir_len, link_buf, link_len);
+                    new_path[cur_dir_len + link_len] = '\0';
                 }
+
+                remaining_len = strlen(p);
+                if (remaining_len > 0) {
+                    size_t new_path_len = strlen(new_path);
+                    if (new_path[new_path_len - 1] != '/') {
+                        new_path[new_path_len++] = '/';
+                    }
+                    memcpy(new_path + new_path_len, p, remaining_len + 1);
+                }
+
+                return resolve_path(result, result_len, new_path, symlinks_followed + 1);
             } else {
-                handle_path_segment(result, &result_len, seg_start, seg_len);
+                handle_path_segment(result, result_len, seg_start, seg_len);
             }
         }
     }
 
-    if (stat(result, &st) != 0) {
-        report_error("/", result + 1, errno);
-        return;
-    }
+    return 0;
+}
 
-    if (S_ISDIR(st.st_mode) && result[result_len - 1] != '/') {
-        result[result_len++] = '/';
-        result[result_len] = '\0';
-    }
+void abspath(const char *path) {
+    char result[MAX_PATH_LEN] = "/";
+    size_t result_len = 1;
+    struct stat st;
 
-    report_path(result);
+    if (resolve_path(result, &result_len, path, 0) == 0) {
+        if (stat(result, &st) != 0) {
+            report_error("/", result + 1, errno);
+            return;
+        }
+
+        if (S_ISDIR(st.st_mode) && result[result_len - 1] != '/') {
+            result[result_len++] = '/';
+            result[result_len] = '\0';
+        }
+
+        report_path(result);
+    }
 }
