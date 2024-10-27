@@ -59,14 +59,18 @@ void abspath(const char *path) {
 
         if (seg_len > 0) {
             char temp_path[MAX_PATH_LEN];
-            strncpy(temp_path, result, result_len);
-            temp_path[result_len] = '\0';
+            size_t temp_len = result_len;
+
+            memcpy(temp_path, result, result_len);
+            temp_path[temp_len] = '\0';
 
             if (result_len > 1) {
-                strcat(temp_path, "/");
+                temp_path[temp_len++] = '/';
+                temp_path[temp_len] = '\0';
             }
 
-            strncat(temp_path, seg_start, seg_len);
+            memcpy(temp_path + temp_len, seg_start, seg_len);
+            temp_path[temp_len + seg_len] = '\0';
 
             if (lstat(temp_path, &st) != 0) {
                 report_error(result, seg_start, errno);
