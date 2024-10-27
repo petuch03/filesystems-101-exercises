@@ -35,12 +35,23 @@ static void handle_path_segment(char *result, size_t *result_len, const char *se
     result[*result_len] = '\0';
 }
 
+static void split_last_component(const char *path, char *dir, char *file) {
+    const char *last_slash = strrchr(path, '/');
+
+    if (!last_slash || last_slash == path) {
+        strcpy(dir, "/");
+        strcpy(file, path[0] == '/' ? path + 1 : path);
+    } else {
+        memcpy(dir, path, last_slash - path);
+        dir[last_slash - path] = '\0';
+        strcpy(file, last_slash + 1);
+    }
+}
+
 static int resolve_path(char *result, size_t *result_len, const char *path, int symlinks_followed) {
     struct stat st;
     char link_buf[MAX_PATH_LEN];
     const char *p = path;
-    char temp_path[MAX_PATH_LEN];
-    size_t temp_len;
 
     if (symlinks_followed >= MAX_SYMLINKS) {
         errno = ELOOP;
@@ -67,12 +78,14 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
         }
 
         if (seg_len > 0) {
-            temp_len = *result_len;
+            char temp_path[MAX_PATH_LEN];
+            size_t temp_len = *result_len;
             memcpy(temp_path, result, temp_len);
             temp_path[temp_len] = '\0';
 
             if (temp_len > 1) {
                 temp_path[temp_len++] = '/';
+                temp_path[temp_len] = '\0';
             }
 
             memcpy(temp_path + temp_len, seg_start, seg_len);
@@ -80,12 +93,12 @@ static int resolve_path(char *result, size_t *result_len, const char *path, int 
 
             if (lstat(temp_path, &st) != 0) {
                 if (errno == ENOENT) {
-                    if (!*p) {
-                        report_error(result, seg_start, ENOENT);
-                        return -1;
-                    }
+                    char dir[MAX_PATH_LEN], file[MAX_PATH_LEN];
+                    split_last_component(temp_path, dir, file);
+                    report_error(dir, file, ENOENT);
+                } else {
+                    report_error(result, seg_start, errno);
                 }
-                report_error(result, seg_start, errno);
                 return -1;
             }
 
@@ -139,15 +152,9 @@ void abspath(const char *path) {
 
     if (resolve_path(result, &result_len, path, 0) == 0) {
         if (stat(result, &st) != 0) {
-            char *last_slash = strrchr(result, '/');
-            if (last_slash != NULL && last_slash != result) {
-                char parent[MAX_PATH_LEN];
-                memcpy(parent, result, last_slash - result);
-                parent[last_slash - result] = '\0';
-                report_error(parent, last_slash + 1, errno);
-            } else {
-                report_error("/", result + 1, errno);
-            }
+            char dir[MAX_PATH_LEN], file[MAX_PATH_LEN];
+            split_last_component(result, dir, file);
+            report_error(dir, file, errno);
             return;
         }
 
