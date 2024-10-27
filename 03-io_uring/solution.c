@@ -4,7 +4,7 @@
 #include <string.h>
 #include <errno.h>
 
-#define COPY_BLOCK_SIZE (256 * 1024)
+#define COPY_BLOCK_SIZE (256 * 1024)  // 256KB blocks
 #define QUEUE_DEPTH 4
 
 struct io_data {
@@ -40,6 +40,7 @@ int copy(int in, int out) {
         data[i]->read_done = 0;
     }
 
+    // Submit initial read requests
     for (i = 0; i < QUEUE_DEPTH; i++) {
         sqe = io_uring_get_sqe(&ring);
         if (!sqe) {
