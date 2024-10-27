@@ -52,7 +52,7 @@ int fs_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_
     if (strcmp(path, FILE_PATH) != 0) return -ENOENT;
     const char* content = generate_greeting();
     size_t content_len = strlen(content);
-    if (offset >= content_len) return 0;
+    if ((size_t)offset >= content_len) return 0;
     if (size > content_len - offset) size = content_len - offset;
     memcpy(buf, content + offset, size);
     return size;
