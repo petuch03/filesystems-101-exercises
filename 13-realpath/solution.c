@@ -20,6 +20,7 @@ static void handle_path_segment(char *result, size_t *result_len, const char *se
         while (*result_len > 1 && result[*result_len - 1] != '/') {
             (*result_len)--;
         }
+        result[*result_len] = '\0';
         return;
     }
 
@@ -31,6 +32,28 @@ static void handle_path_segment(char *result, size_t *result_len, const char *se
     memcpy(result + *result_len, segment, seg_len);
     *result_len += seg_len;
     result[*result_len] = '\0';
+}
+
+static void process_path_component(char *result, size_t *result_len, const char *component, size_t len) {
+    const char *p = component;
+    const char *end = component + len;
+    const char *seg_start;
+
+    while (p < end) {
+        while (p < end && *p == '/') {
+            p++;
+        }
+
+        seg_start = p;
+
+        while (p < end && *p != '/') {
+            p++;
+        }
+
+        if (p > seg_start) {
+            handle_path_segment(result, result_len, seg_start, p - seg_start);
+        }
+    }
 }
 
 void abspath(const char *path) {
@@ -63,7 +86,6 @@ void abspath(const char *path) {
 
             memcpy(temp_path, result, result_len);
             temp_path[temp_len] = '\0';
-
             if (result_len > 1) {
                 temp_path[temp_len++] = '/';
                 temp_path[temp_len] = '\0';
@@ -88,9 +110,9 @@ void abspath(const char *path) {
                 if (link_buf[0] == '/') {
                     result[1] = '\0';
                     result_len = 1;
-                    handle_path_segment(result, &result_len, link_buf + 1, strlen(link_buf) - 1);
+                    process_path_component(result, &result_len, link_buf + 1, link_len - 1);
                 } else {
-                    handle_path_segment(result, &result_len, link_buf, link_len);
+                    process_path_component(result, &result_len, link_buf, link_len);
                 }
             } else {
                 handle_path_segment(result, &result_len, seg_start, seg_len);
