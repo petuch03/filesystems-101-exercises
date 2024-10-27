@@ -96,12 +96,81 @@ static int hello_write(const char *path, const char *buf, size_t size,
     return -EROFS;
 }
 
+static int hello_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    (void) path;
+    (void) mode;
+    (void) fi;
+    return -EROFS;
+}
+
+static int hello_mkdir(const char *path, mode_t mode)
+{
+    (void) path;
+    (void) mode;
+    return -EROFS;
+}
+
+static int hello_rmdir(const char *path)
+{
+    (void) path;
+    return -EROFS;
+}
+
+static int hello_unlink(const char *path)
+{
+    (void) path;
+    return -EROFS;
+}
+
+static int hello_truncate(const char *path, off_t offset, struct fuse_file_info *fi)
+{
+    (void) path;
+    (void) offset;
+    (void) fi;
+    return -EROFS;
+}
+
+static int hello_utimens(const char *path, const struct timespec tv[2],
+                        struct fuse_file_info *fi)
+{
+    (void) path;
+    (void) tv;
+    (void) fi;
+    return -EROFS;
+}
+
+static int hello_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    (void) path;
+    (void) mode;
+    (void) fi;
+    return -EROFS;
+}
+
+static int hello_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi)
+{
+    (void) path;
+    (void) uid;
+    (void) gid;
+    (void) fi;
+    return -EROFS;
+}
+
 struct fuse_operations hellofs_ops = {
     .getattr    = hello_getattr,
     .readdir    = hello_readdir,
     .open       = hello_open,
     .read       = hello_read,
     .write      = hello_write,
+    .create     = hello_create,
+    .mkdir      = hello_mkdir,
+    .rmdir      = hello_rmdir,
+    .unlink     = hello_unlink,
+    .truncate   = hello_truncate,
+    .utimens    = hello_utimens,
+    .chmod      = hello_chmod,
+    .chown      = hello_chown,
 };
 
 int helloworld(const char *mntp)
