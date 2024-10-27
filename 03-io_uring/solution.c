@@ -112,6 +112,18 @@ int copy(int in_fd, int out_fd) {
     while (active_xfers > 0) {
         ret = io_uring_wait_cqe(&ring, &cqe);
         if (ret < 0)
+            struct io_uring_cqe *cleanup_cqe;
+            while (active_ios > 0) {
+                if (io_uring_peek_cqe(&ring, &cleanup_cqe) == 0) {
+                    struct xfer_ctx *cleanup_ctx = io_uring_cqe_get_data(cleanup_cqe);
+                    if (cleanup_ctx) {
+                        free(cleanup_ctx->buf);
+                        free(cleanup_ctx);
+                    }
+                    io_uring_cqe_seen(&ring, cleanup_cqe);
+                    active_ios--;
+                }
+            }
             break;
         struct xfer_ctx *ctx = io_uring_cqe_get_data(cqe);
         int bytes = cqe->res;
@@ -121,6 +133,18 @@ int copy(int in_fd, int out_fd) {
             ret = bytes;
             free(ctx->buf);
             free(ctx);
+            struct io_uring_cqe *cleanup_cqe;
+            while (active_ios > 0) {
+                if (io_uring_peek_cqe(&ring, &cleanup_cqe) == 0) {
+                    struct xfer_ctx *cleanup_ctx = io_uring_cqe_get_data(cleanup_cqe);
+                    if (cleanup_ctx) {
+                        free(cleanup_ctx->buf);
+                        free(cleanup_ctx);
+                    }
+                    io_uring_cqe_seen(&ring, cleanup_cqe);
+                    active_ios--;
+                }
+            }
             break;
         }
         if (ctx->is_read) {
@@ -131,6 +155,18 @@ int copy(int in_fd, int out_fd) {
                 ret = -errno;
                 free(ctx->buf);
                 free(ctx);
+                struct io_uring_cqe *cleanup_cqe;
+                while (active_ios > 0) {
+                    if (io_uring_peek_cqe(&ring, &cleanup_cqe) == 0) {
+                        struct xfer_ctx *cleanup_ctx = io_uring_cqe_get_data(cleanup_cqe);
+                        if (cleanup_ctx) {
+                            free(cleanup_ctx->buf);
+                            free(cleanup_ctx);
+                        }
+                        io_uring_cqe_seen(&ring, cleanup_cqe);
+                        active_ios--;
+                    }
+                }
                 break;
             }
             
@@ -138,6 +174,18 @@ int copy(int in_fd, int out_fd) {
                 struct xfer_ctx *new_ctx = malloc(sizeof(*new_ctx));
                 if (!new_ctx) {
                     ret = -ENOMEM;
+                    struct io_uring_cqe *cleanup_cqe;
+                    while (active_ios > 0) {
+                        if (io_uring_peek_cqe(&ring, &cleanup_cqe) == 0) {
+                            struct xfer_ctx *cleanup_ctx = io_uring_cqe_get_data(cleanup_cqe);
+                            if (cleanup_ctx) {
+                                free(cleanup_ctx->buf);
+                                free(cleanup_ctx);
+                            }
+                            io_uring_cqe_seen(&ring, cleanup_cqe);
+                            active_ios--;
+                        }
+                    }
                     break;
                 }
                 
@@ -147,6 +195,18 @@ int copy(int in_fd, int out_fd) {
                 if (push_read(&ring, in_fd, new_ctx, chunk) < 0) {
                     free(new_ctx);
                     ret = -errno;
+                    struct io_uring_cqe *cleanup_cqe;
+                    while (active_ios > 0) {
+                        if (io_uring_peek_cqe(&ring, &cleanup_cqe) == 0) {
+                            struct xfer_ctx *cleanup_ctx = io_uring_cqe_get_data(cleanup_cqe);
+                            if (cleanup_ctx) {
+                                free(cleanup_ctx->buf);
+                                free(cleanup_ctx);
+                            }
+                            io_uring_cqe_seen(&ring, cleanup_cqe);
+                            active_ios--;
+                        }
+                    }
                     break;
                 }
 
