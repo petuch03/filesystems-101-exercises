@@ -103,3 +103,9 @@ struct fuse_operations hellofs_ops = {
     .read       = hello_read,
     .write      = hello_write,
 };
+
+int helloworld(const char *mntp)
+{
+	char *argv[] = {"exercise", "-f", (char *)mntp, NULL};
+	return fuse_main(3, argv, &hellofs_ops, NULL);
+}
