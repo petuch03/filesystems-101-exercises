@@ -1,3 +1,4 @@
+#define _FILE_OFFSET_BITS 64
 #ifndef FUSE_USE_VERSION
 #define FUSE_USE_VERSION 31
 #endif
@@ -16,9 +17,7 @@ static char* build_message(void) {
     return buf;
 }
 
-static int fs_attributes(const char* path, struct stat* stats, struct fuse_file_info* fi) {
-    (void) fi;
-
+static int fs_attributes(const char* path, struct stat* stats) {
     if (strcmp(path, "/") == 0) {
         stats->st_mode = S_IFDIR | 0755;
         stats->st_nlink = 2;
@@ -41,22 +40,21 @@ static int fs_attributes(const char* path, struct stat* stats, struct fuse_file_
 }
 
 static int fs_list_dir(const char* path, void* buffer, fuse_fill_dir_t filler,
-                      off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags) {
+                      off_t offset, struct fuse_file_info* fi) {
     (void) offset;
     (void) fi;
-    (void) flags;
 
     if (strcmp(path, "/") != 0)
         return -ENOENT;
 
     struct stat st = {0};
     st.st_mode = S_IFDIR | 0755;
-    filler(buffer, ".", &st, 0, 0);
-    filler(buffer, "..", &st, 0, 0);
+    filler(buffer, ".", &st, 0);
+    filler(buffer, "..", &st, 0);
 
     st.st_mode = S_IFREG | 0400;
     st.st_size = strlen(build_message());
-    filler(buffer, "hello", &st, 0, 0);
+    filler(buffer, "hello", &st, 0);
 
     return 0;
 }
@@ -79,7 +77,7 @@ static int fs_read(const char* path, char* buf, size_t size, off_t offset,
     const char* content = build_message();
     size_t content_len = strlen(content);
 
-    if (offset >= content_len)
+    if ((size_t)offset >= content_len)
         return 0;
 
     if (size > content_len - offset)
@@ -99,17 +97,15 @@ static int fs_write(const char* path, const char* buf, size_t size,
     return -EROFS;
 }
 
-static int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
+static int fs_truncate(const char* path, off_t offset) {
     (void) path;
-    (void) size;
-    (void) fi;
+    (void) offset;
     return -EROFS;
 }
 
-static int fs_chmod(const char* path, mode_t mode, struct fuse_file_info* fi) {
+static int fs_chmod(const char* path, mode_t mode) {
     (void) path;
     (void) mode;
-    (void) fi;
     return -EROFS;
 }
 
@@ -120,7 +116,7 @@ static int fs_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
     return -EROFS;
 }
 
-static struct fuse_operations fs_ops = {
+static struct fuse_operations hellofs_ops = {
     .getattr = fs_attributes,
     .readdir = fs_list_dir,
     .open = fs_open,
