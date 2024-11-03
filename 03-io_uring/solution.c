@@ -26,16 +26,8 @@ int copy(int in, int out) {
         return -errno;
 
     for (i = 0; i < QUEUE_DEPTH; i++) {
-        data[i] = malloc(sizeof(struct io_data));
-        if (!data[i]) {
-            ret = -ENOMEM;
-            goto cleanup;
-        }
-        data[i]->buf = malloc(COPY_BLOCK_SIZE);
-        if (!data[i]->buf) {
-            ret = -ENOMEM;
-            goto cleanup;
-        }
+        data[i] = fs_xmalloc(sizeof(struct io_data));
+        data[i]->buf = fs_xmalloc(COPY_BLOCK_SIZE);
         data[i]->offset = i * COPY_BLOCK_SIZE;
         data[i]->read_done = 0;
     }
@@ -119,12 +111,19 @@ int copy(int in, int out) {
     ret = 0;
 
 cleanup:
-    for (i = 0; i < QUEUE_DEPTH; i++) {
-        if (data[i]) {
-            if (data[i]->buf)
-                free(data[i]->buf);
-            free(data[i]);
+    while (pending > 0) {
+        ret = io_uring_wait_cqe(&ring, &cqe);
+        if (ret < 0) {
+            ret = -errno;
+            break;
         }
+        io_uring_cqe_seen(&ring, cqe);
+        pending--;
+    }
+
+    for (i = 0; i < QUEUE_DEPTH; i++) {
+        free(data[i]->buf);
+        free(data[i]);
     }
     io_uring_queue_exit(&ring);
     return ret;
