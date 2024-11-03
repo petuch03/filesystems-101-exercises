@@ -21,6 +21,7 @@ int copy(int in, int out) {
     struct io_uring_cqe *cqe;
     struct io_data *data[QUEUE_DEPTH] = {0};
     int ret, i, pending = 0;
+    int reads_in_flight = 0;
 
     ret = io_uring_queue_init(QUEUE_DEPTH * 2, &ring, 0);
     if (ret < 0)
@@ -50,9 +51,9 @@ int copy(int in, int out) {
             goto cleanup;
         }
         io_uring_prep_read(sqe, in, data[i]->buf, COPY_BLOCK_SIZE, data[i]->offset);
-        data[i]->in_flight = 1;
         io_uring_sqe_set_data(sqe, data[i]);
         pending++;
+        reads_in_flight++;
     }
 
     ret = io_uring_submit(&ring);
@@ -80,12 +81,13 @@ int copy(int in, int out) {
         }
 
         pending--;
-        current->in_flight = 0; // completed
 
         if (!current->read_done) {
             // Read completed
+            reads_in_flight--;
             current->size = bytes;
             current->read_done = 1;
+            current->in_flight = 1;
 
             if (bytes > 0) {
                 // Submit write
@@ -95,25 +97,25 @@ int copy(int in, int out) {
                     goto cleanup;
                 }
                 io_uring_prep_write(sqe, out, current->buf, bytes, current->offset);
-                current->in_flight = 1;
                 io_uring_sqe_set_data(sqe, current);
                 pending++;
             }
         } else {
-            current->read_done = 0;
+            current->in_flight = 0;
 
-            if (current->size == COPY_BLOCK_SIZE) {
+            if (current->size == COPY_BLOCK_SIZE && reads_in_flight < QUEUE_DEPTH) {
                 sqe = io_uring_get_sqe(&ring);
                 if (!sqe) {
                     ret = -EAGAIN;
                     goto cleanup;
                 }
                 current->offset = next_offset;
+                current->read_done = 0;
                 io_uring_prep_read(sqe, in, current->buf, COPY_BLOCK_SIZE, next_offset);
-                current->in_flight = 1;
                 io_uring_sqe_set_data(sqe, current);
                 next_offset += COPY_BLOCK_SIZE;
                 pending++;
+                reads_in_flight++;
             }
         }
 
