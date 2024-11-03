@@ -12,6 +12,7 @@ struct io_data {
     size_t size;
     off_t offset;
     int read_done;
+    int in_flight;  // buffer being used
 };
 
 int copy(int in, int out) {
@@ -38,6 +39,7 @@ int copy(int in, int out) {
         }
         data[i]->offset = i * COPY_BLOCK_SIZE;
         data[i]->read_done = 0;
+        data[i]->in_flight = 0;
     }
 
     // Submit initial read requests
@@ -48,6 +50,7 @@ int copy(int in, int out) {
             goto cleanup;
         }
         io_uring_prep_read(sqe, in, data[i]->buf, COPY_BLOCK_SIZE, data[i]->offset);
+        data[i]->in_flight = 1;
         io_uring_sqe_set_data(sqe, data[i]);
         pending++;
     }
@@ -77,6 +80,7 @@ int copy(int in, int out) {
         }
 
         pending--;
+        current->in_flight = 0; // completed
 
         if (!current->read_done) {
             // Read completed
@@ -91,22 +95,25 @@ int copy(int in, int out) {
                     goto cleanup;
                 }
                 io_uring_prep_write(sqe, out, current->buf, bytes, current->offset);
+                current->in_flight = 1;
                 io_uring_sqe_set_data(sqe, current);
                 pending++;
+            }
+        } else {
+            current->read_done = 0;
 
-                if (bytes == COPY_BLOCK_SIZE) {
-                    sqe = io_uring_get_sqe(&ring);
-                    if (!sqe) {
-                        ret = -EAGAIN;
-                        goto cleanup;
-                    }
-                    current->offset = next_offset;
-                    current->read_done = 0;
-                    io_uring_prep_read(sqe, in, current->buf, COPY_BLOCK_SIZE, next_offset);
-                    io_uring_sqe_set_data(sqe, current);
-                    next_offset += COPY_BLOCK_SIZE;
-                    pending++;
+            if (current->size == COPY_BLOCK_SIZE) {
+                sqe = io_uring_get_sqe(&ring);
+                if (!sqe) {
+                    ret = -EAGAIN;
+                    goto cleanup;
                 }
+                current->offset = next_offset;
+                io_uring_prep_read(sqe, in, current->buf, COPY_BLOCK_SIZE, next_offset);
+                current->in_flight = 1;
+                io_uring_sqe_set_data(sqe, current);
+                next_offset += COPY_BLOCK_SIZE;
+                pending++;
             }
         }
 
