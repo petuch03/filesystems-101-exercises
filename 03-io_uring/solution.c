@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fs/malloc.h>
 
 #define COPY_BLOCK_SIZE (256 * 1024)  // 256KB blocks
 #define QUEUE_DEPTH 4
