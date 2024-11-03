@@ -12,7 +12,6 @@ struct io_data {
     size_t size;
     off_t offset;
     int read_done;
-    int in_flight;  // buffer being used
 };
 
 int copy(int in, int out) {
@@ -21,7 +20,6 @@ int copy(int in, int out) {
     struct io_uring_cqe *cqe;
     struct io_data *data[QUEUE_DEPTH] = {0};
     int ret, i, pending = 0;
-    int reads_in_flight = 0;
 
     ret = io_uring_queue_init(QUEUE_DEPTH * 2, &ring, 0);
     if (ret < 0)
@@ -40,7 +38,6 @@ int copy(int in, int out) {
         }
         data[i]->offset = i * COPY_BLOCK_SIZE;
         data[i]->read_done = 0;
-        data[i]->in_flight = 0;
     }
 
     // Submit initial read requests
@@ -53,7 +50,6 @@ int copy(int in, int out) {
         io_uring_prep_read(sqe, in, data[i]->buf, COPY_BLOCK_SIZE, data[i]->offset);
         io_uring_sqe_set_data(sqe, data[i]);
         pending++;
-        reads_in_flight++;
     }
 
     ret = io_uring_submit(&ring);
@@ -83,11 +79,8 @@ int copy(int in, int out) {
         pending--;
 
         if (!current->read_done) {
-            // Read completed
-            reads_in_flight--;
             current->size = bytes;
             current->read_done = 1;
-            current->in_flight = 1;
 
             if (bytes > 0) {
                 // Submit write
@@ -101,9 +94,7 @@ int copy(int in, int out) {
                 pending++;
             }
         } else {
-            current->in_flight = 0;
-
-            if (current->size == COPY_BLOCK_SIZE && reads_in_flight < QUEUE_DEPTH) {
+            if (current->size == COPY_BLOCK_SIZE) {
                 sqe = io_uring_get_sqe(&ring);
                 if (!sqe) {
                     ret = -EAGAIN;
@@ -115,7 +106,6 @@ int copy(int in, int out) {
                 io_uring_sqe_set_data(sqe, current);
                 next_offset += COPY_BLOCK_SIZE;
                 pending++;
-                reads_in_flight++;
             }
         }
 
