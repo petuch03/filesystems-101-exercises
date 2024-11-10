@@ -91,12 +91,41 @@ struct ext2_blkiter
 	uint32_t indirect_pos[4];
 };
 
-int ext2_fs_init(struct ext2_fs **fs, int fd)
-{
-	/* implement me */
-	(void) fs;
-	(void) fd;
-	return -EOPNOTSUPP;
+int ext2_fs_init(struct ext2_fs **fs, int fd) {
+	struct ext2_fs *new_fs = fs_xzalloc(sizeof(struct ext2_fs));
+	new_fs->fd = fd;
+
+	ssize_t bytes = pread(fd, &new_fs->sb, sizeof(struct ext2_super_block), 1024);
+	if (bytes != sizeof(struct ext2_super_block)) {
+		fs_xfree(new_fs);
+		return -EIO;
+	}
+
+	if (new_fs->sb.s_magic != EXT2_SUPER_MAGIC) {
+		fs_xfree(new_fs);
+		return -EPROTO;
+	}
+
+	new_fs->block_size = EXT2_BLOCK_SIZE_MIN << new_fs->sb.s_log_block_size;
+	new_fs->groups_count = (new_fs->sb.s_blocks_count - 1) / new_fs->sb.s_blocks_per_group + 1;
+
+	// Read group descriptors
+	size_t gd_size = sizeof(struct ext2_group_desc) * new_fs->groups_count;
+	new_fs->gd = fs_xmalloc(gd_size);
+
+	off_t gd_offset = new_fs->block_size;
+	if (new_fs->block_size > 1024)
+		gd_offset = new_fs->block_size * 2;
+
+	bytes = pread(fd, new_fs->gd, gd_size, gd_offset);
+	if (bytes != gd_size) {
+		fs_xfree(new_fs->gd);
+		fs_xfree(new_fs);
+		return -EIO;
+	}
+
+	*fs = new_fs;
+	return 0;
 }
 
 void ext2_fs_free(struct ext2_fs *fs)
