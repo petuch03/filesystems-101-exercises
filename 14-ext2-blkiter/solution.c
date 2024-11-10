@@ -118,7 +118,7 @@ int ext2_fs_init(struct ext2_fs **fs, int fd) {
 		gd_offset = new_fs->block_size * 2;
 
 	bytes = pread(fd, new_fs->gd, gd_size, gd_offset);
-	if (bytes != gd_size) {
+	if ((unsigned long) bytes != gd_size) {
 		fs_xfree(new_fs->gd);
 		fs_xfree(new_fs);
 		return -EIO;
