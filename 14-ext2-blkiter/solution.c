@@ -153,6 +153,9 @@ static int read_inode(struct ext2_fs *fs, int ino, struct ext2_inode *inode) {
 
 int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino)
 {
+	if (!i || !fs || ino < 1)
+		return -EINVAL;
+
 	struct ext2_blkiter *iter = fs_xzalloc(sizeof(struct ext2_blkiter));
 	iter->fs = fs;
 
@@ -168,8 +171,13 @@ int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino)
 	}
 
 	iter->curr_block = 0;
-	iter->total_blocks = iter->inode.i_blocks / (2 << (fs->sb.s_log_block_size));
+
+	uint32_t sectors_per_block = fs->block_size / 512;
+	iter->total_blocks = (iter->inode.i_blocks + sectors_per_block - 1) / sectors_per_block;
+
 	iter->indirect_blocks = NULL;
+	iter->indirect_level = 0;
+	memset(iter->indirect_pos, 0, sizeof(iter->indirect_pos));
 
 	*i = iter;
 	return 0;
