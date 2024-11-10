@@ -171,6 +171,16 @@ int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino)
 	iter->total_blocks = iter->inode.i_blocks / (2 << (fs->sb.s_log_block_size));
 	iter->indirect_blocks = NULL;
 
+	uint32_t addr_per_block = fs->block_size / 4;
+	uint32_t max_blocks = 12 + addr_per_block +
+						 addr_per_block * addr_per_block +
+						 addr_per_block * addr_per_block * addr_per_block;
+
+	if (iter->total_blocks > max_blocks) {
+		fs_xfree(iter);
+		return -EPROTO;
+	}
+
 	*i = iter;
 	return 0;
 }
