@@ -33,6 +33,17 @@ struct ext2_super_block {
     uint32_t s_rev_level;
 } __attribute__((packed));
 
+struct ext2_group_desc {
+    uint32_t bg_block_bitmap;
+    uint32_t bg_inode_bitmap;
+    uint32_t bg_inode_table;
+    uint16_t bg_free_blocks_count;
+    uint16_t bg_free_inodes_count;
+    uint16_t bg_used_dirs_count;
+    uint16_t bg_pad;
+    uint32_t bg_reserved[3];
+} __attribute__((packed));
+
 struct ext2_inode {
     uint16_t i_mode;
     uint16_t i_uid;
@@ -54,6 +65,19 @@ struct ext2_inode {
     uint32_t i_reserved2[3];
 } __attribute__((packed));
 
+static int write_all(int fd, const void *buffer, size_t count) {
+    const char *buf = buffer;
+    size_t written = 0;
+
+    while (written < count) {
+        ssize_t ret = write(fd, buf + written, count - written);
+        if (ret < 0)
+            return -errno;
+        written += ret;
+    }
+    return 0;
+}
+
 static int read_block(int fd, void *buffer, uint32_t block_nr, uint32_t block_size) {
     ssize_t bytes_read = pread(fd, buffer, block_size, block_nr * block_size);
     if (bytes_read < 0)
@@ -73,11 +97,21 @@ int dump_file(int img, int inode_nr, int out) {
 
     uint32_t block_size = 1024 << sb.s_log_block_size;
 
-    uint32_t inodes_per_group = sb.s_inodes_per_group;
-    uint32_t block_group = (inode_nr - 1) / inodes_per_group;
-    uint32_t inode_index = (inode_nr - 1) % inodes_per_group;
-    uint32_t inode_table_offset = 2048 + (block_group * sizeof(struct ext2_inode) * inodes_per_group);
-    uint32_t inode_offset = inode_table_offset + (inode_index * sizeof(struct ext2_inode));
+    // Calculate group descriptor location
+    uint32_t block_group = (inode_nr - 1) / sb.s_inodes_per_group;
+    uint32_t gdt_offset = block_size == 1024 ? 2048 : block_size;
+
+    // Read group descriptor
+    struct ext2_group_desc gd;
+    read_size = pread(img, &gd, sizeof(gd), gdt_offset + (block_group * sizeof(struct ext2_group_desc)));
+    if (read_size < 0)
+        return -errno;
+    if (read_size != sizeof(gd))
+        return -EIO;
+
+    // Calculate inode location
+    uint32_t inode_index = (inode_nr - 1) % sb.s_inodes_per_group;
+    uint32_t inode_offset = (gd.bg_inode_table * block_size) + (inode_index * sizeof(struct ext2_inode));
 
     struct ext2_inode inode;
     read_size = pread(img, &inode, sizeof(inode), inode_offset);
@@ -89,6 +123,7 @@ int dump_file(int img, int inode_nr, int out) {
     uint32_t remaining_size = inode.i_size;
     char *block_buffer = fs_xmalloc(block_size);
 
+    // Direct blocks
     for (int i = 0; i < 12 && remaining_size > 0 && inode.i_block[i]; i++) {
         int result = read_block(img, block_buffer, inode.i_block[i], block_size);
         if (result < 0) {
@@ -97,14 +132,15 @@ int dump_file(int img, int inode_nr, int out) {
         }
 
         uint32_t write_size = (remaining_size < block_size) ? remaining_size : block_size;
-        ssize_t written = write(out, block_buffer, write_size);
-        if (written < 0) {
+        result = write_all(out, block_buffer, write_size);
+        if (result < 0) {
             fs_xfree(block_buffer);
-            return -errno;
+            return result;
         }
         remaining_size -= write_size;
     }
 
+    // Single indirect blocks
     if (inode.i_block[12] && remaining_size > 0) {
         uint32_t *indirect = fs_xmalloc(block_size);
         int result = read_block(img, indirect, inode.i_block[12], block_size);
@@ -123,17 +159,18 @@ int dump_file(int img, int inode_nr, int out) {
             }
 
             uint32_t write_size = (remaining_size < block_size) ? remaining_size : block_size;
-            ssize_t written = write(out, block_buffer, write_size);
-            if (written < 0) {
+            result = write_all(out, block_buffer, write_size);
+            if (result < 0) {
                 fs_xfree(indirect);
                 fs_xfree(block_buffer);
-                return -errno;
+                return result;
             }
             remaining_size -= write_size;
         }
         fs_xfree(indirect);
     }
 
+    // Double indirect blocks
     if (inode.i_block[13] && remaining_size > 0) {
         uint32_t *dbl_indirect = fs_xmalloc(block_size);
         int result = read_block(img, dbl_indirect, inode.i_block[13], block_size);
@@ -163,12 +200,12 @@ int dump_file(int img, int inode_nr, int out) {
                 }
 
                 uint32_t write_size = (remaining_size < block_size) ? remaining_size : block_size;
-                ssize_t written = write(out, block_buffer, write_size);
-                if (written < 0) {
+                result = write_all(out, block_buffer, write_size);
+                if (result < 0) {
                     fs_xfree(indirect);
                     fs_xfree(dbl_indirect);
                     fs_xfree(block_buffer);
-                    return -errno;
+                    return result;
                 }
                 remaining_size -= write_size;
             }
