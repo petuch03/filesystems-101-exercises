@@ -1,4 +1,5 @@
-#include <fs_malloc.h>
+#pragma once
+#include <stdlib.h>
 
 #define EXT2_SUPER_MAGIC 0xEF53
 #define DIRECT_POINTERS 12

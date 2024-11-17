@@ -1,4 +1,5 @@
 #include <solution.h>
+#include <fs_malloc.h>
 #include <fs_ext2_structs.h>
 #include <errno.h>
 #include <stdint.h>
