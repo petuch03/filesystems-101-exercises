@@ -5,21 +5,10 @@
 #include <unistd.h>
 #include <string.h>
 
-
 #define EXT2_SUPER_MAGIC 0xEF53
-#define DIRECT_POINTERS 12
+#define POINTERS 12
 #define SUPERBLOCK_OFFSET 1024
 #define BLOCK_GROUP_DESC_OFFSET 2048
-
-struct fs_blockgroup_descriptor {
-    uint32_t address_of_block_usage_bitmap;
-    uint32_t address_of_inode_usage_bitmap;
-    uint32_t address_of_inode_table;
-    uint16_t unallocated_blocks_counts;
-    uint16_t unallocated_inodes_counts;
-    uint16_t directories_in_group_count;
-    uint8_t unused[14];
-};
 
 struct fs_superblock {
     uint32_t s_inodes_count;
@@ -80,7 +69,7 @@ struct fs_inode {
     uint32_t disk_sector_count;
     uint32_t flags;
     uint32_t os_specific_value_1;
-    uint32_t direct_block_pointers[DIRECT_POINTERS];
+    uint32_t direct_block_pointers[POINTERS];
     uint32_t singly_indirect_block;
     uint32_t doubly_indirect_block;
     uint32_t triply_indirect_block;
@@ -93,7 +82,6 @@ struct fs_inode {
 };
 
 
-// Directory entry structure
 struct ext2_dir_entry {
     uint32_t inode;        // Inode number
     uint16_t rec_len;      // Directory entry length
@@ -119,7 +107,6 @@ static int read_block(int fd, void *buffer, uint32_t block_nr, uint32_t block_si
 int dump_dir(int img, int inode_nr) {
     int result = 0;
 
-    // Read superblock
     struct fs_superblock *sb = fs_xmalloc(sizeof(struct fs_superblock));
     if (pread(img, sb, sizeof(struct fs_superblock), SUPERBLOCK_OFFSET) != sizeof(struct fs_superblock)) {
         fs_xfree(sb);
@@ -130,14 +117,11 @@ int dump_dir(int img, int inode_nr) {
         return -EINVAL;
     }
 
-    // Calculate block size
     uint32_t block_size = 1024 << sb->s_log_block_size_kbytes;
 
-    // Read inode
     uint32_t block_group = (inode_nr - 1) / sb->s_inodes_per_group;
     uint32_t local_inode = (inode_nr - 1) % sb->s_inodes_per_group;
 
-    // Find inode table location
     uint32_t group_desc_size = 32;
     uint32_t group_desc_offset = BLOCK_GROUP_DESC_OFFSET + (block_group * group_desc_size);
 
@@ -157,18 +141,15 @@ int dump_dir(int img, int inode_nr) {
         return -EIO;
     }
 
-    // Allocate block buffer
     char *block_buffer = fs_xmalloc(block_size);
     uint64_t remaining_size = inode->size_lower;
 
-    // Process direct blocks
-    for (int i = 0; i < DIRECT_POINTERS && inode->direct_block_pointers[i] && remaining_size > 0; i++) {
+    for (int i = 0; i < POINTERS && inode->direct_block_pointers[i] && remaining_size > 0; i++) {
         result = read_block(img, block_buffer, inode->direct_block_pointers[i], block_size);
         if (result < 0) {
             goto cleanup;
         }
 
-        // Process directory entries in this block
         char *ptr = block_buffer;
         while (ptr < block_buffer + block_size) {
             struct ext2_dir_entry *entry = (struct ext2_dir_entry *)ptr;
@@ -176,12 +157,10 @@ int dump_dir(int img, int inode_nr) {
                 break;
             }
 
-            // Create null-terminated name
             char *name = fs_xmalloc(entry->name_len + 1);
             memcpy(name, entry->name, entry->name_len);
             name[entry->name_len] = '\0';
 
-            // Report file based on type
             if (entry->file_type == EXT2_FT_REG_FILE) {
                 report_file(entry->inode, 'f', name);
             } else if (entry->file_type == EXT2_FT_DIR) {
@@ -195,7 +174,6 @@ int dump_dir(int img, int inode_nr) {
         remaining_size -= (remaining_size < block_size) ? remaining_size : block_size;
     }
 
-    // Process singly indirect block if needed
     if (inode->singly_indirect_block && remaining_size > 0) {
         uint32_t *indirect_block = fs_xmalloc(block_size);
         result = read_block(img, indirect_block, inode->singly_indirect_block, block_size);
@@ -211,7 +189,6 @@ int dump_dir(int img, int inode_nr) {
                 goto cleanup;
             }
 
-            // Process directory entries in this block
             char *ptr = block_buffer;
             while (ptr < block_buffer + block_size) {
                 struct ext2_dir_entry *entry = (struct ext2_dir_entry *)ptr;
