@@ -108,11 +108,7 @@ struct ext2_blkiter {
 };
 
 static int read_block(int fd, void *buffer, uint32_t block_nr, uint32_t block_size) {
-    if (lseek(fd, block_nr * block_size, SEEK_SET) < 0) {
-        return -errno;
-    }
-
-    ssize_t bytes_read = read(fd, buffer, block_size);
+    ssize_t bytes_read = pread(fd, buffer, block_size, block_nr * block_size);
     if (bytes_read < 0) {
         return -errno;
     }
@@ -139,7 +135,7 @@ static int write_data(int fd, const void *buffer, size_t size) {
 int dump_file(int img, int inode_nr, int out) {
     // Read superblock
     struct fs_superblock *sb = fs_xmalloc(sizeof(struct fs_superblock));
-    if (lseek(img, SUPERBLOCK_OFFSET, SEEK_SET) < 0) {
+    if (pread(img, sb, sizeof(struct fs_superblock), SUPERBLOCK_OFFSET) != sizeof(struct fs_superblock)) {
         fs_xfree(sb);
         return -errno;
     }
@@ -162,10 +158,10 @@ int dump_file(int img, int inode_nr, int out) {
 
     // Read inode
     struct fs_inode *inode = fs_xmalloc(sizeof(struct fs_inode));
-    if (lseek(img, inode_offset, SEEK_SET) < 0) {
+    if (pread(img, inode, sizeof(struct fs_inode), inode_offset) != sizeof(struct fs_inode)) {
         fs_xfree(inode);
         fs_xfree(sb);
-        return -errno;
+        return -EIO;
     }
     if (read(img, inode, sizeof(struct fs_inode)) != sizeof(struct fs_inode)) {
         fs_xfree(inode);
