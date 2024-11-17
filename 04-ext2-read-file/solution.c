@@ -6,10 +6,9 @@
 #include <string.h>
 
 #define EXT2_SUPER_MAGIC 0xEF53
-#define BLOCK_SIZE 1024  // Starting with standard 1K blocks
-#define INODE_SIZE 128   // Standard inode size
+#define BLOCK_SIZE 1024
+#define INODE_SIZE 128
 
-// Superblock structure
 struct ext2_super_block {
     uint32_t s_inodes_count;
     uint32_t s_blocks_count;
@@ -36,7 +35,6 @@ struct ext2_super_block {
     uint32_t s_rev_level;
 } __attribute__((packed));
 
-// Inode structure
 struct ext2_inode {
     uint16_t i_mode;
     uint16_t i_uid;
@@ -50,7 +48,7 @@ struct ext2_inode {
     uint32_t i_blocks;
     uint32_t i_flags;
     uint32_t i_reserved1;
-    uint32_t i_block[15]; // Direct, indirect, and double-indirect blocks
+    uint32_t i_block[15];
     uint32_t i_generation;
     uint32_t i_file_acl;
     uint32_t i_dir_acl;
@@ -59,11 +57,7 @@ struct ext2_inode {
 } __attribute__((packed));
 
 static int read_block(int fd, void *buffer, uint32_t block_nr, uint32_t block_size) {
-    if (lseek(fd, block_nr * block_size, SEEK_SET) < 0) {
-        return -errno;
-    }
-
-    ssize_t bytes_read = read(fd, buffer, block_size);
+    ssize_t bytes_read = pread(fd, buffer, block_size, block_nr * block_size);
     if (bytes_read < 0) {
         return -errno;
     }
@@ -90,10 +84,11 @@ static int write_data(int fd, const void *buffer, size_t size) {
 int dump_file(int img, int inode_nr, int out)
 {
     struct ext2_super_block sb;
-    if (lseek(img, 1024, SEEK_SET) < 0) {
+    ssize_t read_size = pread(img, &sb, sizeof(sb), 1024);
+    if (read_size < 0) {
         return -errno;
     }
-    if (read(img, &sb, sizeof(sb)) != sizeof(sb)) {
+    if (read_size != sizeof(sb)) {
         return -EIO;
     }
     if (sb.s_magic != EXT2_SUPER_MAGIC) {
@@ -102,26 +97,23 @@ int dump_file(int img, int inode_nr, int out)
 
     uint32_t block_size = 1024 << sb.s_log_block_size;
 
-    // Calculate inode location
     uint32_t block_group = (inode_nr - 1) / sb.s_inodes_per_group;
     uint32_t inode_index = (inode_nr - 1) % sb.s_inodes_per_group;
     uint32_t block_group_offset = 2048 + (block_group * sizeof(struct ext2_inode) * sb.s_inodes_per_group);
     uint32_t inode_offset = block_group_offset + (inode_index * sizeof(struct ext2_inode));
 
-    // Read inode
     struct ext2_inode inode;
-    if (lseek(img, inode_offset, SEEK_SET) < 0) {
+    read_size = pread(img, &inode, sizeof(inode), inode_offset);
+    if (read_size < 0) {
         return -errno;
     }
-    if (read(img, &inode, sizeof(inode)) != sizeof(inode)) {
+    if (read_size != sizeof(inode)) {
         return -EIO;
     }
 
-    // Allocate buffer for block reading
     char *block_buffer = fs_xmalloc(block_size);
     int result = 0;
 
-    // Process direct blocks
     for (int i = 0; i < 12 && inode.i_block[i] && inode.i_size > 0; i++) {
         result = read_block(img, block_buffer, inode.i_block[i], block_size);
         if (result < 0) {
@@ -138,7 +130,6 @@ int dump_file(int img, int inode_nr, int out)
         inode.i_size -= to_write;
     }
 
-    // Process single indirect block
     if (inode.i_block[12] && inode.i_size > 0) {
         uint32_t *indirect_block = fs_xmalloc(block_size);
         result = read_block(img, indirect_block, inode.i_block[12], block_size);
@@ -168,7 +159,6 @@ int dump_file(int img, int inode_nr, int out)
         fs_xfree(indirect_block);
     }
 
-    // Process double indirect block
     if (inode.i_block[13] && inode.i_size > 0) {
         uint32_t *double_indirect = fs_xmalloc(block_size);
         result = read_block(img, double_indirect, inode.i_block[13], block_size);
