@@ -161,23 +161,83 @@ static int read_block(struct ext2_fs *fs, uint32_t block_no, void *buffer) {
 int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
     uint32_t ptrs_per_block = i->fs->block_size / sizeof(uint32_t);
 
-    if (i->current < 12) {
+    if (i->current < 12) { // Direct blocks
         uint32_t ptr = i->inode.i_block[i->current];
-        if (ptr == 0) return 0;
+        if (ptr == 0) {
+            return 0;
+        }
         *blkno = ptr;
         i->current++;
         return 1;
-    } else if ((unsigned int) i->current < (12 + ptrs_per_block)) {
+    }
+
+    // Single indirect blocks
+    if (i->current < (12 + ptrs_per_block)) {
+        // First time accessing indirect block
         if (!i->direct_ptr) {
+            if (i->inode.i_block[12] == 0) {
+                return 0;
+            }
             i->direct_ptr = fs_xmalloc(i->fs->block_size);
-            if (read_block(i->fs, i->inode.i_block[12], i->direct_ptr) < 0)
+            if (read_block(i->fs, i->inode.i_block[12], i->direct_ptr) < 0) {
                 return -EIO;
+            }
+            // Return the indirect block number first
             *blkno = i->inode.i_block[12];
             return 1;
         }
 
+        // Then return the pointer from the indirect block
         uint32_t ptr = i->direct_ptr[i->current - 12];
-        if (ptr == 0) return 0;
+        if (ptr == 0) {
+            return 0;
+        }
+        *blkno = ptr;
+        i->current++;
+        return 1;
+    }
+
+    // Double indirect blocks
+    if (i->current < (12 + ptrs_per_block + ptrs_per_block * ptrs_per_block)) {
+        uint32_t offset = i->current - (12 + ptrs_per_block);
+        uint32_t indirect_idx = offset / ptrs_per_block;
+        uint32_t direct_idx = offset % ptrs_per_block;
+
+        // First time accessing double indirect block
+        if (!i->indirect_ptr) {
+            if (i->inode.i_block[13] == 0) {
+                return 0;
+            }
+            i->indirect_ptr = fs_xmalloc(i->fs->block_size);
+            if (read_block(i->fs, i->inode.i_block[13], i->indirect_ptr) < 0) {
+                return -EIO;
+            }
+            // Return the double indirect block number first
+            *blkno = i->inode.i_block[13];
+            return 1;
+        }
+
+        // First time accessing each new indirect block from the double indirect block
+        if (direct_idx == 0) {
+            if (i->indirect_ptr[indirect_idx] == 0) {
+                return 0;
+            }
+            if (!i->direct_ptr) {
+                i->direct_ptr = fs_xmalloc(i->fs->block_size);
+            }
+            if (read_block(i->fs, i->indirect_ptr[indirect_idx], i->direct_ptr) < 0) {
+                return -EIO;
+            }
+            // Return the indirect block number
+            *blkno = i->indirect_ptr[indirect_idx];
+            return 1;
+        }
+
+        // Return the actual data block number
+        uint32_t ptr = i->direct_ptr[direct_idx];
+        if (ptr == 0) {
+            return 0;
+        }
         *blkno = ptr;
         i->current++;
         return 1;
