@@ -172,7 +172,7 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
     }
 
     // Single indirect blocks
-    if (i->current < (12 + ptrs_per_block)) {
+    if ((uint32_t) i->current < (12 + ptrs_per_block)) {
         // First time accessing indirect block
         if (!i->direct_ptr) {
             if (i->inode.i_block[12] == 0) {
@@ -198,7 +198,7 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
     }
 
     // Double indirect blocks
-    if (i->current < (12 + ptrs_per_block + ptrs_per_block * ptrs_per_block)) {
+    if ( (uint32_t) i->current < (12 + ptrs_per_block + ptrs_per_block * ptrs_per_block)) {
         uint32_t offset = i->current - (12 + ptrs_per_block);
         uint32_t indirect_idx = offset / ptrs_per_block;
         uint32_t direct_idx = offset % ptrs_per_block;
