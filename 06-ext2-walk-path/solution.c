@@ -1,4 +1,9 @@
 #include <solution.h>
+#include <fs_malloc.h>
+#include <errno.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <string.h>
 
 static int read_block(int fd, void *buffer, uint32_t block_nr, uint32_t block_size) {
     ssize_t bytes_read = pread(fd, buffer, block_size, block_nr * block_size);
