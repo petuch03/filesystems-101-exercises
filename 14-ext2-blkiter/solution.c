@@ -111,51 +111,45 @@ int ext2_fs_init(struct ext2_fs **fs, int fd) {
 }
 
 int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino) {
-    size_t desc_per_block = fs->block_size / sizeof(struct ext2_group_desc);
-    size_t group_index = (ino - 1) / fs->sb.s_inodes_per_group;
-    size_t inode_index = (ino - 1) % fs->sb.s_inodes_per_group;
+	size_t desc_per_block = fs->block_size / sizeof(struct ext2_group_desc);
+	size_t group_index = (ino - 1) / fs->sb.s_inodes_per_group;
+	size_t inode_index = (ino - 1) % fs->sb.s_inodes_per_group;
 
-    size_t desc_block = fs->sb.s_first_data_block + 1 + group_index / desc_per_block;
-    size_t desc_offset = (group_index % desc_per_block) * sizeof(struct ext2_group_desc);
+	size_t desc_block = fs->sb.s_first_data_block + 1 + group_index / desc_per_block;
+	size_t desc_offset = (group_index % desc_per_block) * sizeof(struct ext2_group_desc);
 
-    struct ext2_group_desc group_desc;
-    ssize_t read_bytes = pread(fs->fd, &group_desc, sizeof(group_desc),
-                              fs->block_size * desc_block + desc_offset);
-    if (read_bytes != sizeof(group_desc)) {
-        return -EIO;
-    }
+	struct ext2_group_desc group_desc;
+	ssize_t read_bytes = pread(fs->fd, &group_desc, sizeof(group_desc),
+							  fs->block_size * desc_block + desc_offset);
+	if (read_bytes == -1) {
+		return -errno;
+	}
 
-    struct ext2_blkiter *iter = fs_xmalloc(sizeof(struct ext2_blkiter));
-    iter->inode_table = group_desc.bg_inode_table;
+	struct ext2_blkiter *iter = fs_xmalloc(sizeof(struct ext2_blkiter));
+	iter->inode_table = group_desc.bg_inode_table;
+	iter->fs = fs;
 
-    read_bytes = pread(fs->fd, &iter->inode, sizeof(struct ext2_inode),
-                      fs->block_size * iter->inode_table + inode_index * fs->sb.s_inode_size);
-    if (read_bytes != sizeof(struct ext2_inode)) {
-        fs_xfree(iter);
-        return -EIO;
-    }
+	read_bytes = pread(fs->fd, &iter->inode, sizeof(struct ext2_inode),
+					  fs->block_size * iter->inode_table + inode_index * fs->sb.s_inode_size);
+	if (read_bytes == -1) {
+		fs_xfree(iter);
+		return -errno;
+	}
 
-    iter->current = 0;
-    iter->fs = fs;
-    iter->indirect_block = NULL;
-    iter->double_indirect_block = NULL;
-    iter->current_indirect_block_num = -1;
+	iter->current = 0;
+	iter->indirect_block = NULL;
+	iter->double_indirect_block = NULL;
+	iter->current_indirect_block_num = -1;
 
-    *i = iter;
-    return 0;
+	*i = iter;
+	return 0;
 }
 
 int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
     int ptrs_per_block = i->fs->block_size / sizeof(int);
 
-    int direct_end = 12;  // EXT2_NDIR_BLOCKS
-    int indirect_start = direct_end;
-    int indirect_end = direct_end + ptrs_per_block;
-    int double_indirect_start = indirect_end;
-    int double_indirect_end = indirect_end + ptrs_per_block * ptrs_per_block;
-
-    // Direct blocks
-    if (i->current < direct_end) {
+    // Direct blocks (0-11)
+    if (i->current < 12) {
         int ptr = i->inode.i_block[i->current];
         if (ptr == 0) {
             return 0;
@@ -166,54 +160,71 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
     }
 
     // Single indirect blocks
-    if (i->current < indirect_end) {
+    if (i->current < (12 + ptrs_per_block)) {
         if (!i->indirect_block) {
+            if (i->inode.i_block[12] == 0) {
+                return 0;
+            }
             i->indirect_block = fs_xmalloc(i->fs->block_size);
-            if (pread(i->fs->fd, i->indirect_block, i->fs->block_size,
-                     i->inode.i_block[12] * i->fs->block_size) == -1) {
+            ssize_t read_bytes = pread(i->fs->fd, i->indirect_block, i->fs->block_size,
+                                     i->inode.i_block[12] * i->fs->block_size);
+            if (read_bytes == -1) {
                 return -errno;
             }
+            *blkno = i->indirect_block[0];  // Return first block in indirect block
+            i->current++;
+            return 1;
         }
 
-        if (i->indirect_block[i->current - indirect_start] == 0) {
+        int indirect_index = i->current - 12;
+        if (i->indirect_block[indirect_index] == 0) {
             return 0;
         }
 
-        *blkno = i->indirect_block[i->current - indirect_start];
+        *blkno = i->indirect_block[indirect_index];
         i->current++;
         return 1;
     }
 
     // Double indirect blocks
-    if (i->current < double_indirect_end) {
+    if (i->current < (12 + ptrs_per_block + ptrs_per_block * ptrs_per_block)) {
         if (!i->double_indirect_block) {
+            if (i->inode.i_block[13] == 0) {
+                return 0;
+            }
             i->double_indirect_block = fs_xmalloc(i->fs->block_size);
-            if (pread(i->fs->fd, i->double_indirect_block, i->fs->block_size,
-                     i->inode.i_block[13] * i->fs->block_size) == -1) {
+            ssize_t read_bytes = pread(i->fs->fd, i->double_indirect_block, i->fs->block_size,
+                                     i->inode.i_block[13] * i->fs->block_size);
+            if (read_bytes == -1) {
                 return -errno;
             }
         }
-
-        int indirect_idx = (i->current - double_indirect_start) / ptrs_per_block;
-        int direct_idx = (i->current - double_indirect_start) % ptrs_per_block;
 
         if (!i->indirect_block) {
             i->indirect_block = fs_xmalloc(i->fs->block_size);
         }
 
-        if (i->current_indirect_block_num != i->double_indirect_block[indirect_idx]) {
-            i->current_indirect_block_num = i->double_indirect_block[indirect_idx];
-            if (pread(i->fs->fd, i->indirect_block, i->fs->block_size,
-                     i->current_indirect_block_num * i->fs->block_size) == -1) {
+        int double_indirect_offset = i->current - (12 + ptrs_per_block);
+        int indirect_index = double_indirect_offset / ptrs_per_block;
+        int direct_index = double_indirect_offset % ptrs_per_block;
+
+        if (i->current_indirect_block_num != i->double_indirect_block[indirect_index]) {
+            if (i->double_indirect_block[indirect_index] == 0) {
+                return 0;
+            }
+            i->current_indirect_block_num = i->double_indirect_block[indirect_index];
+            ssize_t read_bytes = pread(i->fs->fd, i->indirect_block, i->fs->block_size,
+                                     i->current_indirect_block_num * i->fs->block_size);
+            if (read_bytes == -1) {
                 return -errno;
             }
         }
 
-        if (i->indirect_block[direct_idx] == 0) {
+        if (i->indirect_block[direct_index] == 0) {
             return 0;
         }
 
-        *blkno = i->indirect_block[direct_idx];
+        *blkno = i->indirect_block[direct_index];
         i->current++;
         return 1;
     }
