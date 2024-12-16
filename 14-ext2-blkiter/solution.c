@@ -154,7 +154,7 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
         int ptr = i->inode.i_block[i->current];
         if (ptr == 0) {
             i->current++;
-            return ext2_blkiter_next(i, blkno);  // Skip zero blocks
+            return ext2_blkiter_next(i, blkno);
         }
         *blkno = ptr;
         i->current++;
@@ -165,10 +165,11 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
     if (i->current < (12 + ptrs_per_block)) {
         if (!i->indirect_block) {
             if (i->inode.i_block[12] == 0) {
-                i->current = 12 + ptrs_per_block;  // Skip to double indirect
+                i->current = 12 + ptrs_per_block;
                 return ext2_blkiter_next(i, blkno);
             }
-            i->indirect_block = fs_xmalloc(i->fs->block_size);
+            // Use xzalloc instead of xmalloc to zero-initialize memory
+            i->indirect_block = fs_xzalloc(i->fs->block_size);
             if (pread(i->fs->fd, i->indirect_block, i->fs->block_size,
                      i->inode.i_block[12] * i->fs->block_size) == -1) {
                 return -errno;
@@ -180,7 +181,7 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
         int indirect_index = i->current - 12;
         if (i->indirect_block[indirect_index] == 0) {
             i->current++;
-            return ext2_blkiter_next(i, blkno);  // Skip zero blocks
+            return ext2_blkiter_next(i, blkno);
         }
 
         *blkno = i->indirect_block[indirect_index];
@@ -194,7 +195,8 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
             if (i->inode.i_block[13] == 0) {
                 return 0;
             }
-            i->double_indirect_block = fs_xmalloc(i->fs->block_size);
+            // Use xzalloc for double indirect block
+            i->double_indirect_block = fs_xzalloc(i->fs->block_size);
             if (pread(i->fs->fd, i->double_indirect_block, i->fs->block_size,
                      i->inode.i_block[13] * i->fs->block_size) == -1) {
                 return -errno;
@@ -207,14 +209,14 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
         int direct_idx = (i->current - (12 + ptrs_per_block)) % ptrs_per_block;
 
         if (!i->indirect_block) {
-            i->indirect_block = fs_xmalloc(i->fs->block_size);
+            i->indirect_block = fs_xzalloc(i->fs->block_size);
         }
 
         if (direct_idx == 0) {
             if (i->double_indirect_block[indirect_idx] == 0) {
                 i->current = (i->current + ptrs_per_block - 1) / ptrs_per_block * ptrs_per_block;
                 i->current++;
-                return ext2_blkiter_next(i, blkno);  // Skip empty indirect blocks
+                return ext2_blkiter_next(i, blkno);
             }
             if (i->current_indirect_block_num != i->double_indirect_block[indirect_idx]) {
                 i->current_indirect_block_num = i->double_indirect_block[indirect_idx];
@@ -229,7 +231,7 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
 
         if (i->indirect_block[direct_idx] == 0) {
             i->current++;
-            return ext2_blkiter_next(i, blkno);  // Skip zero blocks
+            return ext2_blkiter_next(i, blkno);
         }
 
         *blkno = i->indirect_block[direct_idx];
@@ -239,7 +241,6 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
 
     return 0;
 }
-
 
 void ext2_blkiter_free(struct ext2_blkiter *i) {
     if (i) {
