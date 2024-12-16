@@ -91,23 +91,21 @@ struct ext2_blkiter {
 };
 
 int ext2_fs_init(struct ext2_fs **fs, int fd) {
-    struct ext2_fs *fs_temp = fs_xmalloc(sizeof(struct ext2_fs));
-    fs_temp->fd = fd;
+	struct ext2_fs *fs_temp = fs_xmalloc(sizeof(struct ext2_fs));
+	fs_temp->fd = fd;
 
-    ssize_t bytes = pread(fd, &fs_temp->sb, sizeof(struct ext2_super_block), 1024);
-    if (bytes != sizeof(struct ext2_super_block)) {
-        fs_xfree(fs_temp);
-        return -EIO;
-    }
+	// Read superblock from fixed offset 1024
+	ssize_t read_sb = pread(fs_temp->fd, &fs_temp->sb, sizeof(struct ext2_super_block), 1024);
+	if(read_sb == -1) {
+		fs_xfree(fs_temp);
+		return -errno;
+	}
 
-    if (fs_temp->sb.s_magic != EXT2_SUPER_MAGIC) {
-        fs_xfree(fs_temp);
-        return -EPROTO;
-    }
+	// Calculate block size: 1024 << log_block_size
+	fs_temp->block_size = 1024 << fs_temp->sb.s_log_block_size;
+	*fs = fs_temp;
 
-    fs_temp->block_size = EXT2_BLOCK_SIZE_MIN << fs_temp->sb.s_log_block_size;
-    *fs = fs_temp;
-    return 0;
+	return 0;
 }
 
 int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino) {
@@ -115,28 +113,31 @@ int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino) {
 	size_t group_index = (ino - 1) / fs->sb.s_inodes_per_group;
 	size_t inode_index = (ino - 1) % fs->sb.s_inodes_per_group;
 
+	// Calculate group descriptor location
 	size_t desc_block = fs->sb.s_first_data_block + 1 + group_index / desc_per_block;
 	size_t desc_offset = (group_index % desc_per_block) * sizeof(struct ext2_group_desc);
 
+	// Read group descriptor
 	struct ext2_group_desc group_desc;
 	ssize_t read_bytes = pread(fs->fd, &group_desc, sizeof(group_desc),
 							  fs->block_size * desc_block + desc_offset);
-	if (read_bytes == -1) {
-		return -errno;
+	if (read_bytes != sizeof(group_desc)) {
+		return -EIO;
 	}
 
 	struct ext2_blkiter *iter = fs_xmalloc(sizeof(struct ext2_blkiter));
 	iter->inode_table = group_desc.bg_inode_table;
-	iter->fs = fs;
 
+	// Read inode data using correct inode size
 	read_bytes = pread(fs->fd, &iter->inode, sizeof(struct ext2_inode),
-					  fs->block_size * iter->inode_table + inode_index * fs->sb.s_inode_size);
-	if (read_bytes == -1) {
+					  fs->block_size * iter->inode_table + inode_index * sizeof(struct ext2_inode));
+	if (read_bytes != sizeof(struct ext2_inode)) {
 		fs_xfree(iter);
-		return -errno;
+		return -EIO;
 	}
 
 	iter->current = 0;
+	iter->fs = fs;
 	iter->indirect_block = NULL;
 	iter->double_indirect_block = NULL;
 	iter->current_indirect_block_num = -1;
@@ -146,46 +147,44 @@ int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino) {
 }
 
 int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
-    int ptrs_per_block = i->fs->block_size / sizeof(int);
+	int ptrs_per_block = i->fs->block_size / sizeof(int);
 
-    // Direct blocks (0-11)
-    if (i->current < 12) {
-        int ptr = i->inode.i_block[i->current];
-        if (ptr == 0) {
-            return 0;
-        }
-        *blkno = ptr;
-        i->current++;
-        return 1;
-    }
+	// Direct blocks (0-11)
+	if (i->current < 12) {
+		int ptr = i->inode.i_block[i->current];
+		if (ptr == 0) {
+			return 0;
+		}
+		*blkno = ptr;
+		i->current++;
+		return 1;
+	}
 
-    // Single indirect blocks
-    if (i->current < (12 + ptrs_per_block)) {
-        if (!i->indirect_block) {
-            if (i->inode.i_block[12] == 0) {
-                return 0;
-            }
-            i->indirect_block = fs_xmalloc(i->fs->block_size);
-            ssize_t read_bytes = pread(i->fs->fd, i->indirect_block, i->fs->block_size,
-                                     i->inode.i_block[12] * i->fs->block_size);
-            if (read_bytes == -1) {
-                return -errno;
-            }
-            // Return the indirect block number itself first
-            *blkno = i->inode.i_block[12];
-            i->current++;
-            return 1;
-        }
+	// Single indirect blocks
+	if (i->current < (12 + ptrs_per_block)) {
+		if (!i->indirect_block) {
+			if (i->inode.i_block[12] == 0) {
+				return 0;
+			}
+			i->indirect_block = fs_xmalloc(i->fs->block_size);
+			if (pread(i->fs->fd, i->indirect_block, i->fs->block_size,
+					 i->inode.i_block[12] * i->fs->block_size) == -1) {
+				return -errno;
+					 }
+			// Return indirect block number first
+			*blkno = i->inode.i_block[12];
+			return 1;
+		}
 
-        int indirect_index = i->current - 12 - 1; // Subtract 1 because we already returned the indirect block
-        if (indirect_index >= ptrs_per_block || i->indirect_block[indirect_index] == 0) {
-            return 0;
-        }
+		int indirect_index = i->current - 12;
+		if (i->indirect_block[indirect_index] == 0) {
+			return 0;
+		}
 
-        *blkno = i->indirect_block[indirect_index];
-        i->current++;
-        return 1;
-    }
+		*blkno = i->indirect_block[indirect_index];
+		i->current++;
+		return 1;
+	}
 
     // Double indirect blocks
     if (i->current < (12 + ptrs_per_block + ptrs_per_block * ptrs_per_block)) {
