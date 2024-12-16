@@ -136,7 +136,7 @@ int ext2_blkiter_init(struct ext2_blkiter **i, struct ext2_fs *fs, int ino) {
 
     read_bytes = pread(fs->fd, &iter->inode, sizeof(struct ext2_inode),
                       group_desc.bg_inode_table * fs->block_size +
-                      inode_index * fs->sb.s_inodes_per_group);
+                      inode_index * sizeof(struct ext2_inode));
     if (read_bytes != sizeof(struct ext2_inode)) {
         fs_xfree(iter);
         return -EIO;
