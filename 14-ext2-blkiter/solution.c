@@ -228,3 +228,11 @@ void ext2_blkiter_free(struct ext2_blkiter *i) {
         fs_xfree(i);
     }
 }
+
+void ext2_fs_free(struct ext2_fs *fs)
+{
+	if (fs) {
+		close(fs->fd);
+		fs_xfree(fs);
+	}
+}
