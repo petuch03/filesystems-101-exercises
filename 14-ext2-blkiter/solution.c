@@ -171,13 +171,14 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
             if (read_bytes == -1) {
                 return -errno;
             }
-            *blkno = i->indirect_block[0];  // Return first block in indirect block
+            // Return the indirect block number itself first
+            *blkno = i->inode.i_block[12];
             i->current++;
             return 1;
         }
 
-        int indirect_index = i->current - 12;
-        if (i->indirect_block[indirect_index] == 0) {
+        int indirect_index = i->current - 12 - 1; // Subtract 1 because we already returned the indirect block
+        if (indirect_index >= ptrs_per_block || i->indirect_block[indirect_index] == 0) {
             return 0;
         }
 
@@ -198,20 +199,38 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
             if (read_bytes == -1) {
                 return -errno;
             }
+            // Return the double indirect block number itself first
+            *blkno = i->inode.i_block[13];
+            i->current++;
+            return 1;
         }
 
         if (!i->indirect_block) {
             i->indirect_block = fs_xmalloc(i->fs->block_size);
         }
 
-        int double_indirect_offset = i->current - (12 + ptrs_per_block);
+        int double_indirect_offset = i->current - (12 + ptrs_per_block + 1); // +1 for the double indirect block we returned
         int indirect_index = double_indirect_offset / ptrs_per_block;
         int direct_index = double_indirect_offset % ptrs_per_block;
 
-        if (i->current_indirect_block_num != i->double_indirect_block[indirect_index]) {
-            if (i->double_indirect_block[indirect_index] == 0) {
-                return 0;
+        if (indirect_index >= ptrs_per_block || i->double_indirect_block[indirect_index] == 0) {
+            return 0;
+        }
+
+        if (direct_index == 0) {
+            // Return the indirect block number when we start using it
+            i->current_indirect_block_num = i->double_indirect_block[indirect_index];
+            ssize_t read_bytes = pread(i->fs->fd, i->indirect_block, i->fs->block_size,
+                                     i->current_indirect_block_num * i->fs->block_size);
+            if (read_bytes == -1) {
+                return -errno;
             }
+            *blkno = i->current_indirect_block_num;
+            i->current++;
+            return 1;
+        }
+
+        if (i->current_indirect_block_num != i->double_indirect_block[indirect_index]) {
             i->current_indirect_block_num = i->double_indirect_block[indirect_index];
             ssize_t read_bytes = pread(i->fs->fd, i->indirect_block, i->fs->block_size,
                                      i->current_indirect_block_num * i->fs->block_size);
@@ -220,18 +239,17 @@ int ext2_blkiter_next(struct ext2_blkiter *i, int *blkno) {
             }
         }
 
-        if (i->indirect_block[direct_index] == 0) {
+        if (i->indirect_block[direct_index - 1] == 0) { // -1 because we returned the indirect block
             return 0;
         }
 
-        *blkno = i->indirect_block[direct_index];
+        *blkno = i->indirect_block[direct_index - 1];
         i->current++;
         return 1;
     }
 
     return 0;
 }
-
 void ext2_blkiter_free(struct ext2_blkiter *i) {
     if (i) {
         fs_xfree(i->indirect_block);
