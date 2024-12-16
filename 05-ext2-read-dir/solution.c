@@ -90,6 +90,18 @@ struct ext2_dir_entry {
     char     name[];       // File name (NULL-terminated)
 } __attribute__((packed));
 
+// Block iterator structure
+struct ext2_blockiter {
+    int fd;                     // File descriptor of the filesystem image
+    uint32_t block_size;        // Block size in bytes
+    uint32_t curr_idx;          // Current block index
+    uint32_t *curr_block;       // Current block being processed
+    struct fs_inode *inode;     // Inode being processed
+    uint32_t indirect_block;    // Current indirect block number
+    char *block_buffer;         // Buffer for indirect blocks
+    int level;                  // Current indirection level (0=direct, 1=single)
+};
+
 #define EXT2_FT_REG_FILE 1
 #define EXT2_FT_DIR     2
 
@@ -104,8 +116,61 @@ static int read_block(int fd, void *buffer, uint32_t block_nr, uint32_t block_si
     return 0;
 }
 
+// Initialize block iterator
+static struct ext2_blockiter *ext2_blockiter_init(int fd, struct fs_inode *inode, uint32_t block_size) {
+    struct ext2_blockiter *iter = fs_xmalloc(sizeof(struct ext2_blockiter));
+    iter->fd = fd;
+    iter->block_size = block_size;
+    iter->curr_idx = 0;
+    iter->inode = inode;
+    iter->indirect_block = 0;
+    iter->block_buffer = fs_xmalloc(block_size);
+    iter->level = 0;
+    iter->curr_block = NULL;
+    return iter;
+}
+
+// Get next block number
+static int ext2_blockiter_next(struct ext2_blockiter *iter, uint32_t *blkno) {
+    if (iter->curr_idx < POINTERS) {
+        // Direct blocks
+        *blkno = iter->inode->direct_block_pointers[iter->curr_idx++];
+        if (*blkno == 0) {
+            if (iter->inode->singly_indirect_block) {
+                // Switch to indirect blocks
+                iter->level = 1;
+                iter->curr_idx = 0;
+                if (read_block(iter->fd, iter->block_buffer, iter->inode->singly_indirect_block, iter->block_size) < 0) {
+                    return -EIO;
+                }
+                iter->curr_block = (uint32_t *)iter->block_buffer;
+                return ext2_blockiter_next(iter, blkno);
+            }
+            return 0;
+        }
+        return 1;
+    } else if (iter->level == 1) {
+        // Indirect blocks
+        *blkno = iter->curr_block[iter->curr_idx++];
+        if (*blkno == 0 || iter->curr_idx >= iter->block_size / 4) {
+            return 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+// Cleanup block iterator
+static void ext2_blockiter_cleanup(struct ext2_blockiter *iter) {
+    if (iter) {
+        fs_xfree(iter->block_buffer);
+        fs_xfree(iter);
+    }
+}
+
 int dump_dir(int img, int inode_nr) {
     int result = 0;
+    uint32_t blkno;
 
     struct fs_superblock *sb = fs_xmalloc(sizeof(struct fs_superblock));
     if (pread(img, sb, sizeof(struct fs_superblock), SUPERBLOCK_OFFSET) != sizeof(struct fs_superblock)) {
@@ -142,12 +207,12 @@ int dump_dir(int img, int inode_nr) {
     }
 
     char *block_buffer = fs_xmalloc(block_size);
-    uint64_t remaining_size = inode->size_lower;
+    struct ext2_blockiter *iter = ext2_blockiter_init(img, inode, block_size);
 
-    for (int i = 0; i < POINTERS && inode->direct_block_pointers[i] && remaining_size > 0; i++) {
-        result = read_block(img, block_buffer, inode->direct_block_pointers[i], block_size);
+    while ((result = ext2_blockiter_next(iter, &blkno)) > 0) {
+        result = read_block(img, block_buffer, blkno, block_size);
         if (result < 0) {
-            goto cleanup;
+            break;
         }
 
         char *ptr = block_buffer;
@@ -170,54 +235,11 @@ int dump_dir(int img, int inode_nr) {
             fs_xfree(name);
             ptr += entry->rec_len;
         }
-
-        remaining_size -= (remaining_size < block_size) ? remaining_size : block_size;
     }
 
-    if (inode->singly_indirect_block && remaining_size > 0) {
-        uint32_t *indirect_block = fs_xmalloc(block_size);
-        result = read_block(img, indirect_block, inode->singly_indirect_block, block_size);
-        if (result < 0) {
-            fs_xfree(indirect_block);
-            goto cleanup;
-        }
-
-        for (uint32_t i = 0; i < block_size/4 && indirect_block[i] && remaining_size > 0; i++) {
-            result = read_block(img, block_buffer, indirect_block[i], block_size);
-            if (result < 0) {
-                fs_xfree(indirect_block);
-                goto cleanup;
-            }
-
-            char *ptr = block_buffer;
-            while (ptr < block_buffer + block_size) {
-                struct ext2_dir_entry *entry = (struct ext2_dir_entry *)ptr;
-                if (entry->inode == 0 || entry->rec_len == 0) {
-                    break;
-                }
-
-                char *name = fs_xmalloc(entry->name_len + 1);
-                memcpy(name, entry->name, entry->name_len);
-                name[entry->name_len] = '\0';
-
-                if (entry->file_type == EXT2_FT_REG_FILE) {
-                    report_file(entry->inode, 'f', name);
-                } else if (entry->file_type == EXT2_FT_DIR) {
-                    report_file(entry->inode, 'd', name);
-                }
-
-                fs_xfree(name);
-                ptr += entry->rec_len;
-            }
-
-            remaining_size -= (remaining_size < block_size) ? remaining_size : block_size;
-        }
-        fs_xfree(indirect_block);
-    }
-
-cleanup:
+    ext2_blockiter_cleanup(iter);
     fs_xfree(block_buffer);
     fs_xfree(inode);
     fs_xfree(sb);
-    return result;
+    return (result < 0) ? result : 0;
 }
