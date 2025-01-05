@@ -2,9 +2,16 @@ package parhash
 
 import (
 	"context"
+	"net"
+	"sync"
+	"sync/atomic"
 
 	"github.com/pkg/errors"
-	"golang.org/x/sync/semaphore"
+	"google.golang.org/grpc"
+
+	hashpb "fs101ex/pkg/gen/hashsvc"
+	parhashpb "fs101ex/pkg/gen/parhashsvc"
+	"fs101ex/pkg/workgroup"
 )
 
 type Config struct {
