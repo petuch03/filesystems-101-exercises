@@ -8,11 +8,11 @@ import (
 
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
+	"golang.org/x/sync/semaphore"
 
 	hashpb "fs101ex/pkg/gen/hashsvc"
 	parhashpb "fs101ex/pkg/gen/parhashsvc"
 	"fs101ex/pkg/workgroup"
-	"golang.org/x/sync/semaphore"
 )
 
 type Config struct {
