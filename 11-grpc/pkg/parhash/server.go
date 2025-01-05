@@ -31,6 +31,7 @@ type Server struct {
     wg       sync.WaitGroup
 
     backendClients []hashpb.HashSvcClient
+    nextBackend   atomic.Uint64
 }
 
 func New(conf Config) *Server {
