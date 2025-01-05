@@ -12,6 +12,7 @@ import (
 	hashpb "fs101ex/pkg/gen/hashsvc"
 	parhashpb "fs101ex/pkg/gen/parhashsvc"
 	"fs101ex/pkg/workgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 type Config struct {
@@ -38,7 +39,7 @@ type Server struct {
 func New(conf Config) *Server {
 	return &Server{
 		conf: conf,
-		sem:  *semaphore.NewWeighted(int64(conf.Concurrency)),
+		sem:  semaphore.NewWeighted(int64(conf.Concurrency)),
 	}
 }
 
