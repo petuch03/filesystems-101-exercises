@@ -38,7 +38,7 @@ type Server struct {
 func New(conf Config) *Server {
 	return &Server{
 		conf: conf,
-		sem:  semaphore.NewWeighted(int64(conf.Concurrency)),
+		sem:  *semaphore.NewWeighted(int64(conf.Concurrency)),
 	}
 }
 
